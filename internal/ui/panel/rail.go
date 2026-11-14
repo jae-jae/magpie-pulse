@@ -65,7 +65,7 @@ func RailView(c *ui.Context, state *RailState) {
 
 	rail := ui.Box(c.Key("rail")).Size(railW, railH).DragWindow()
 	targetOpen := float32(1.0)
-	if cfg.AutoCollapse && !state.Expanded {
+	if cfg.AutoCollapse && isDocked && !state.Expanded {
 		targetOpen = 0.0
 	}
 	openness := rail.Animate("berth-openness", targetOpen, 180*time.Millisecond)
@@ -223,6 +223,9 @@ func paintRailSurface(p *ui.Painter, r ui.Rect, cfg model.Config, m model.DockMe
 			fill = fill.Mix(*alertColor, 0.85*(1-openness))
 		}
 		p.FillPath(path, fill)
+		if openness < 0.95 {
+			p.StrokePath(path, 1, ui.RGBA(255, 255, 255, 0.14+0.18*(1-openness)))
+		}
 	}
 }
 

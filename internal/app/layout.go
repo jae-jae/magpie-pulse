@@ -68,7 +68,7 @@ func ComputeRailBounds(workArea mygo.Rectangle, cfg model.Config, slotCount int)
 // when AutoCollapse is active and the rail is collapsed. Returns nil when the full
 // window should accept input.
 func ComputeSliverInputRegion(railW, railH int, cfg model.Config, expanded bool) []mygo.Rectangle {
-	if !cfg.AutoCollapse || expanded || railW <= 0 || railH <= 0 {
+	if !cfg.AutoCollapse || !cfg.DockEdge.IsDocked() || expanded || railW <= 0 || railH <= 0 {
 		return nil
 	}
 	m := model.ComputeMetrics(cfg)
@@ -155,6 +155,174 @@ func UpdateDockedRatio(workArea, winBounds mygo.Rectangle, edge model.DockEdge) 
 			return 0.5
 		}
 		return clampFloat64(float64(winBounds.Y-workArea.Y)/float64(avail), 0, 1)
+	}
+}
+
+// UpdateDockedRatioForTransition computes cfg.RailRatio from winBounds centered
+// onto the target docked window size so orientation or padding changes stay aligned.
+func UpdateDockedRatioForTransition(workArea, winBounds mygo.Rectangle, targetEdge model.DockEdge, cfg model.Config, slotCount int) float64 {
+	targetCfg := cfg
+	targetCfg.DockEdge = targetEdge
+	targetBounds := ComputeRailBounds(workArea, targetCfg, slotCount)
+	switch targetEdge {
+	case model.DockTop, model.DockBottom:
+		avail := workArea.Width - targetBounds.Width
+		if avail <= 0 {
+			return 0.5
+		}
+		centerX := float64(winBounds.X) + float64(winBounds.Width)/2.0
+		targetX := centerX - float64(targetBounds.Width)/2.0
+		return clampFloat64((targetX-float64(workArea.X))/float64(avail), 0, 1)
+	default:
+		avail := workArea.Height - targetBounds.Height
+		if avail <= 0 {
+			return 0.5
+		}
+		centerY := float64(winBounds.Y) + float64(winBounds.Height)/2.0
+		targetY := centerY - float64(targetBounds.Height)/2.0
+		return clampFloat64((targetY-float64(workArea.Y))/float64(avail), 0, 1)
+	}
+}
+
+// ComputeFloatingPosition returns the clamped (FloatX, FloatY) origin for DockFloating
+// centered on winBounds so transitioning from a docked edge does not jump.
+func ComputeFloatingPosition(workArea, winBounds mygo.Rectangle, cfg model.Config, slotCount int) (int, int) {
+	floatCfg := cfg
+	floatCfg.DockEdge = model.DockFloating
+	floatCfg.FloatX = 1
+	floatCfg.FloatY = 1
+	targetBounds := ComputeRailBounds(workArea, floatCfg, slotCount)
+	cx := winBounds.X + winBounds.Width/2
+	cy := winBounds.Y + winBounds.Height/2
+	x := cx - targetBounds.Width/2
+	y := cy - targetBounds.Height/2
+	maxX := workArea.X + max(workArea.Width-targetBounds.Width, 0)
+	maxY := workArea.Y + max(workArea.Height-targetBounds.Height, 0)
+	x = clampInt(x, workArea.X, maxX)
+	y = clampInt(y, workArea.Y, maxY)
+	if x == 0 && y == 0 {
+		y = 1
+	}
+	return x, y
+}
+
+// DetectSnapEdge decides whether a dragged rail window should snap to a screen edge
+// or become DockFloating. When already docked, a slightly larger detach threshold
+// avoids accidental unsnapping while sliding along the same edge.
+func DetectSnapEdge(workArea, winBounds mygo.Rectangle, cursor mygo.Point, currentEdge model.DockEdge) (model.DockEdge, bool) {
+	const (
+		snapDist       = 24
+		detachDist     = 32
+		cursorSnapDist = 10
+	)
+	if workArea.Width <= 0 || workArea.Height <= 0 {
+		return currentEdge, currentEdge.IsDocked()
+	}
+
+	leftGap := max(winBounds.X-workArea.X, 0)
+	rightGap := max((workArea.X+workArea.Width)-(winBounds.X+winBounds.Width), 0)
+	topGap := max(winBounds.Y-workArea.Y, 0)
+	bottomGap := max((workArea.Y+workArea.Height)-(winBounds.Y+winBounds.Height), 0)
+
+	gapFor := func(e model.DockEdge) int {
+		switch e {
+		case model.DockLeft:
+			return leftGap
+		case model.DockRight:
+			return rightGap
+		case model.DockTop:
+			return topGap
+		case model.DockBottom:
+			return bottomGap
+		default:
+			return math.MaxInt32
+		}
+	}
+
+	if currentEdge.IsDocked() && gapFor(currentEdge) <= detachDist {
+		return currentEdge, true
+	}
+
+	cursorNear := func(e model.DockEdge) bool {
+		switch e {
+		case model.DockLeft:
+			return cursor.X <= workArea.X+cursorSnapDist
+		case model.DockRight:
+			return cursor.X >= workArea.X+workArea.Width-cursorSnapDist
+		case model.DockTop:
+			return cursor.Y <= workArea.Y+cursorSnapDist
+		case model.DockBottom:
+			return cursor.Y >= workArea.Y+workArea.Height-cursorSnapDist
+		default:
+			return false
+		}
+	}
+
+	candidates := []model.DockEdge{model.DockRight, model.DockLeft, model.DockTop, model.DockBottom}
+	var best model.DockEdge
+	bestScore := math.MaxInt32
+	found := false
+	for _, e := range candidates {
+		g := gapFor(e)
+		near := cursorNear(e)
+		if g > snapDist && !near {
+			continue
+		}
+		score := g
+		if near && score > 0 {
+			score = max(score-snapDist, 0)
+		}
+		if !found || score < bestScore {
+			best = e
+			bestScore = score
+			found = true
+		}
+	}
+	if found {
+		return best, true
+	}
+	return model.DockFloating, false
+}
+
+// IsCursorOnDockEdge reports whether cursor is touching the screen/workArea edge
+// corresponding to edge, excluding a small corner guard to avoid hot-corner conflicts.
+func IsCursorOnDockEdge(workArea, displayBounds mygo.Rectangle, cursor mygo.Point, edge model.DockEdge) bool {
+	const (
+		edgeBand    = 6
+		cornerGuard = 16
+	)
+	if !edge.IsDocked() {
+		return false
+	}
+	if displayBounds.Width <= 0 || displayBounds.Height <= 0 {
+		displayBounds = workArea
+	}
+	if workArea.Width <= 0 || workArea.Height <= 0 {
+		workArea = displayBounds
+	}
+	switch edge {
+	case model.DockRight:
+		yOK := cursor.Y >= displayBounds.Y+cornerGuard && cursor.Y <= displayBounds.Y+displayBounds.Height-cornerGuard
+		innerEdge := min(workArea.X+workArea.Width, displayBounds.X+displayBounds.Width)
+		outerEdge := max(workArea.X+workArea.Width, displayBounds.X+displayBounds.Width)
+		return yOK && cursor.X >= innerEdge-edgeBand && cursor.X <= outerEdge+2
+	case model.DockLeft:
+		yOK := cursor.Y >= displayBounds.Y+cornerGuard && cursor.Y <= displayBounds.Y+displayBounds.Height-cornerGuard
+		outerEdge := min(workArea.X, displayBounds.X)
+		innerEdge := max(workArea.X, displayBounds.X)
+		return yOK && cursor.X >= outerEdge-2 && cursor.X <= innerEdge+edgeBand
+	case model.DockTop:
+		xOK := cursor.X >= displayBounds.X+cornerGuard && cursor.X <= displayBounds.X+displayBounds.Width-cornerGuard
+		outerEdge := min(workArea.Y, displayBounds.Y)
+		innerEdge := max(workArea.Y, displayBounds.Y)
+		return xOK && cursor.Y >= outerEdge-2 && cursor.Y <= innerEdge+edgeBand
+	case model.DockBottom:
+		xOK := cursor.X >= displayBounds.X+cornerGuard && cursor.X <= displayBounds.X+displayBounds.Width-cornerGuard
+		innerEdge := min(workArea.Y+workArea.Height, displayBounds.Y+displayBounds.Height)
+		outerEdge := max(workArea.Y+workArea.Height, displayBounds.Y+displayBounds.Height)
+		return xOK && cursor.Y >= innerEdge-edgeBand && cursor.Y <= outerEdge+2
+	default:
+		return false
 	}
 }
 

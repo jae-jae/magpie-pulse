@@ -22,9 +22,11 @@ import (
 )
 
 const (
-	cardHideGrace    = 320 * time.Millisecond
+	cardHideGrace    = 240 * time.Millisecond
 	railCollapseWait = 350 * time.Millisecond
-	pointerPollRate  = 100 * time.Millisecond
+	edgeRevealGrace  = 800 * time.Millisecond
+	dragSettleWait   = 200 * time.Millisecond
+	pointerPollRate  = 80 * time.Millisecond
 )
 
 // App coordinates the Magpie polling service, floating dock rail, detail card flyout,
@@ -54,10 +56,15 @@ type App struct {
 
 	railVisible    bool
 	railExpanded   bool
+	quitting       bool
 	hoveredSlotID  string
 	selectedSlotID string
 	cardHideAt     time.Time
 	collapseAt     time.Time
+	edgeGraceUntil time.Time
+	dragActive     bool
+	lastMoveAt     time.Time
+	dragPreviewEdge model.DockEdge
 	suppressMove   bool
 	lastSlotCount  int
 	trayAlert      bool
@@ -147,6 +154,12 @@ func (a *App) Run() error {
 		a.showRail()
 	})
 	mygo.App.OnBeforeQuit(func(e *mygo.QuitEvent) {
+		a.quitting = true
+	})
+	mygo.App.OnQuitCanceled(func() {
+		a.quitting = false
+	})
+	mygo.App.OnWillQuit(func(e *mygo.QuitEvent) {
 		a.shutdown()
 	})
 	mygo.App.WhenReady(a.ready)
@@ -162,7 +175,7 @@ func (a *App) ready() {
 		}
 	})
 	a.setupTray()
-	a.createRailWindow()
+	a.createRailWindow(nil)
 	a.setupService()
 	mygo.Screen.OnDisplaysChanged(func() {
 		a.layoutRailWindow()
@@ -372,6 +385,7 @@ func (a *App) setupTray() {
 		{
 			Label: "Quit Magpie Pulse",
 			Click: func(*mygo.MenuItem, *mygo.Window) {
+				a.quitting = true
 				mygo.App.Quit()
 			},
 		},
@@ -418,8 +432,8 @@ func (a *App) syncMenuItems() {
 	}
 }
 
-func (a *App) createRailWindow() {
-	display := a.targetDisplay()
+func (a *App) createRailWindow(preferredBounds *mygo.Rectangle) {
+	display := a.targetDisplay(preferredBounds)
 	bounds := ComputeRailBounds(display.WorkArea, a.cfg, len(a.slots))
 	a.lastSlotCount = len(a.slots)
 
@@ -454,32 +468,16 @@ func (a *App) createRailWindow() {
 	}
 
 	win.OnMove(func() {
-		if a.suppressMove || a.railWin == nil || a.railWin.IsDestroyed() {
+		if a.suppressMove || win != a.railWin || a.railWin == nil || a.railWin.IsDestroyed() {
 			return
 		}
-		if a.cfg.DockEdge == model.DockFloating {
-			x, y := a.railWin.Position()
-			if x != a.cfg.FloatX || y != a.cfg.FloatY {
-				a.cfg.FloatX = x
-				a.cfg.FloatY = y
-				a.railState.Config = a.cfg
-				a.cardState.Config = a.cfg
-				a.settingsState.Config = a.cfg
-				_ = model.SaveConfig(a.cfg)
-			}
-		} else {
-			disp := mygo.Screen.DisplayMatching(a.railWin.Bounds())
-			ratio := UpdateDockedRatio(disp.WorkArea, a.railWin.Bounds(), a.cfg.DockEdge)
-			if math.Abs(ratio-a.cfg.RailRatio) > 0.005 {
-				a.cfg.RailRatio = ratio
-				a.railState.Config = a.cfg
-				a.settingsState.Config = a.cfg
-				_ = model.SaveConfig(a.cfg)
-			}
-		}
+		a.onRailMoved()
 	})
 
 	win.OnClose(func(e *mygo.CloseEvent) {
+		if a.quitting {
+			return
+		}
 		e.PreventDefault()
 		a.hideRail()
 	})
@@ -495,8 +493,15 @@ func (a *App) createRailWindow() {
 func (a *App) recreateRailWindow() {
 	a.destroyCardWindow()
 	old := a.railWin
+	var prevBounds *mygo.Rectangle
+	if old != nil && !old.IsDestroyed() {
+		b := old.Bounds()
+		if b.Width > 0 && b.Height > 0 {
+			prevBounds = &b
+		}
+	}
 	a.railWin = nil
-	a.createRailWindow()
+	a.createRailWindow(prevBounds)
 	if old != nil && !old.IsDestroyed() {
 		old.Destroy()
 	}
@@ -506,7 +511,7 @@ func (a *App) layoutRailWindow() {
 	if a.railWin == nil || a.railWin.IsDestroyed() {
 		return
 	}
-	display := a.targetDisplay()
+	display := a.targetDisplay(nil)
 	bounds := ComputeRailBounds(display.WorkArea, a.cfg, len(a.slots))
 	a.lastSlotCount = len(a.slots)
 
@@ -518,9 +523,12 @@ func (a *App) layoutRailWindow() {
 	a.railWin.Invalidate()
 }
 
-func (a *App) targetDisplay() mygo.Display {
+func (a *App) targetDisplay(preferredBounds *mygo.Rectangle) mygo.Display {
 	if a.cfg.DockEdge == model.DockFloating && (a.cfg.FloatX != 0 || a.cfg.FloatY != 0) {
 		return mygo.Screen.DisplayNearestPoint(mygo.Point{X: a.cfg.FloatX, Y: a.cfg.FloatY})
+	}
+	if preferredBounds != nil && preferredBounds.Width > 0 && preferredBounds.Height > 0 {
+		return mygo.Screen.DisplayMatching(*preferredBounds)
 	}
 	if a.railWin != nil && !a.railWin.IsDestroyed() {
 		b := a.railWin.Bounds()
@@ -542,12 +550,16 @@ func (a *App) updateRailInputRegion() {
 
 func (a *App) updateWatchActive() {
 	cardVisible := a.cardWin != nil && !a.cardWin.IsDestroyed() && a.cardWin.IsVisible()
-	active := a.railVisible && (a.cfg.AutoCollapse || cardVisible || !a.cardHideAt.IsZero())
+	active := a.dragActive || (a.railVisible && ((a.cfg.AutoCollapse && a.cfg.DockEdge.IsDocked()) || cardVisible || !a.cardHideAt.IsZero()))
 	a.watchActive.Store(active)
 }
 
 func (a *App) renderRail(c *ui.Context) {
-	a.railState.Config = a.cfg
+	cfg := a.cfg
+	if a.dragPreviewEdge != "" {
+		cfg.DockEdge = a.dragPreviewEdge
+	}
+	a.railState.Config = cfg
 	a.railState.Slots = a.slots
 	a.railState.Expanded = a.railExpanded
 	a.railState.HoveredSlotID = a.hoveredSlotID
@@ -572,7 +584,8 @@ func (a *App) onHoverSlot(slotID string, rect ui.Rect) {
 	a.hoveredSlotID = slotID
 	a.cardHideAt = time.Time{}
 	a.collapseAt = time.Time{}
-	if a.cfg.AutoCollapse && !a.railExpanded {
+	a.edgeGraceUntil = time.Time{}
+	if a.cfg.AutoCollapse && a.cfg.DockEdge.IsDocked() && !a.railExpanded {
 		a.railExpanded = true
 		a.railState.Expanded = true
 		a.updateRailInputRegion()
@@ -587,10 +600,10 @@ func (a *App) onLeaveRail() {
 	a.hoveredSlotID = ""
 	a.railState.HoveredSlotID = ""
 	now := time.Now()
-	if a.selectedSlotID == "" {
+	if a.cardHideAt.IsZero() {
 		a.cardHideAt = now.Add(cardHideGrace)
 	}
-	if a.cfg.AutoCollapse && a.selectedSlotID == "" {
+	if a.cfg.AutoCollapse && a.cfg.DockEdge.IsDocked() && a.collapseAt.IsZero() {
 		a.collapseAt = now.Add(railCollapseWait)
 	}
 	a.updateWatchActive()
@@ -661,6 +674,9 @@ func (a *App) ensureCardWindow(anchor mygo.Rectangle) {
 		Content:    ui.View(a.renderCard),
 	})
 	fly.OnClose(func(e *mygo.CloseEvent) {
+		if a.quitting {
+			return
+		}
 		e.PreventDefault()
 		a.selectedSlotID = ""
 		a.hoveredSlotID = ""
@@ -744,14 +760,14 @@ func (a *App) hideCard() {
 
 func (a *App) showRail() {
 	a.railVisible = true
-	if a.cfg.AutoCollapse {
+	if a.cfg.AutoCollapse && a.cfg.DockEdge.IsDocked() {
 		a.railExpanded = true
 		a.collapseAt = time.Now().Add(2 * time.Second)
 	} else {
 		a.railExpanded = true
 	}
 	if a.railWin == nil || a.railWin.IsDestroyed() {
-		a.createRailWindow()
+		a.createRailWindow(nil)
 	}
 	a.layoutRailWindow()
 	a.railWin.ShowInactive()
@@ -830,11 +846,14 @@ func (a *App) applyConfig(next model.Config) {
 	a.cardState.Config = next
 	a.settingsState.Config = next
 
-	if !next.AutoCollapse {
+	if !next.AutoCollapse || !next.DockEdge.IsDocked() {
 		a.railExpanded = true
 		a.collapseAt = time.Time{}
-	} else if prev.AutoCollapse != next.AutoCollapse {
+		a.edgeGraceUntil = time.Time{}
+	} else if prev.AutoCollapse != next.AutoCollapse || prev.DockEdge != next.DockEdge {
 		a.railExpanded = false
+		a.collapseAt = time.Time{}
+		a.edgeGraceUntil = time.Time{}
 	}
 
 	needRecreateRail := (prev.DockEdge == model.DockFloating) != (next.DockEdge == model.DockFloating) ||
@@ -939,67 +958,188 @@ func (a *App) startPointerWatcher() {
 	}()
 }
 
+func (a *App) onRailMoved() {
+	a.dragActive = true
+	a.lastMoveAt = time.Now()
+	a.collapseAt = time.Time{}
+	a.edgeGraceUntil = time.Time{}
+
+	if a.cardWin != nil && !a.cardWin.IsDestroyed() && a.cardWin.IsVisible() {
+		a.hoveredSlotID = ""
+		a.selectedSlotID = ""
+		a.railState.HoveredSlotID = ""
+		a.railState.SelectedSlotID = ""
+		a.hideCard()
+	}
+
+	winBounds := a.railWin.Bounds()
+	disp := mygo.Screen.DisplayMatching(winBounds)
+	cursor := mygo.Screen.CursorScreenPoint()
+	targetEdge, snapped := DetectSnapEdge(disp.WorkArea, winBounds, cursor, a.cfg.DockEdge)
+	var preview model.DockEdge
+	if (a.cfg.DockEdge == model.DockRight || a.cfg.DockEdge == model.DockLeft) && !snapped && targetEdge == model.DockFloating {
+		preview = model.DockFloating
+	}
+	if preview != a.dragPreviewEdge {
+		a.dragPreviewEdge = preview
+		a.railWin.Invalidate()
+	}
+	a.updateWatchActive()
+}
+
+func (a *App) settleWindowMove() {
+	a.dragActive = false
+	a.dragPreviewEdge = ""
+	if a.railWin == nil || a.railWin.IsDestroyed() {
+		a.updateWatchActive()
+		return
+	}
+
+	winBounds := a.railWin.Bounds()
+	disp := mygo.Screen.DisplayMatching(winBounds)
+	cursor := mygo.Screen.CursorScreenPoint()
+	targetEdge, snapped := DetectSnapEdge(disp.WorkArea, winBounds, cursor, a.cfg.DockEdge)
+
+	if snapped {
+		newRatio := UpdateDockedRatioForTransition(disp.WorkArea, winBounds, targetEdge, a.cfg, len(a.slots))
+		if targetEdge != a.cfg.DockEdge {
+			next := a.cfg
+			next.DockEdge = targetEdge
+			next.RailRatio = newRatio
+			a.applyConfig(next)
+			return
+		}
+		a.cfg.RailRatio = newRatio
+		a.railState.Config = a.cfg
+		a.cardState.Config = a.cfg
+		a.settingsState.Config = a.cfg
+		_ = model.SaveConfig(a.cfg)
+		a.layoutRailWindow()
+		if a.settingsWin != nil && !a.settingsWin.IsDestroyed() {
+			a.settingsWin.Invalidate()
+		}
+		a.updateWatchActive()
+		return
+	}
+
+	if a.cfg.DockEdge != model.DockFloating {
+		fx, fy := ComputeFloatingPosition(disp.WorkArea, winBounds, a.cfg, len(a.slots))
+		next := a.cfg
+		next.DockEdge = model.DockFloating
+		next.FloatX = fx
+		next.FloatY = fy
+		a.applyConfig(next)
+		return
+	}
+
+	maxX := disp.WorkArea.X + max(disp.WorkArea.Width-winBounds.Width, 0)
+	maxY := disp.WorkArea.Y + max(disp.WorkArea.Height-winBounds.Height, 0)
+	clampedX := clampInt(winBounds.X, disp.WorkArea.X, maxX)
+	clampedY := clampInt(winBounds.Y, disp.WorkArea.Y, maxY)
+	if clampedX == 0 && clampedY == 0 {
+		clampedY = 1
+	}
+	if clampedX != a.cfg.FloatX || clampedY != a.cfg.FloatY {
+		a.cfg.FloatX = clampedX
+		a.cfg.FloatY = clampedY
+		a.railState.Config = a.cfg
+		a.cardState.Config = a.cfg
+		a.settingsState.Config = a.cfg
+		_ = model.SaveConfig(a.cfg)
+	}
+	if clampedX != winBounds.X || clampedY != winBounds.Y {
+		a.layoutRailWindow()
+	} else {
+		a.railWin.Invalidate()
+	}
+	a.updateWatchActive()
+}
+
 func (a *App) pollPointerState() {
+	if a.dragActive {
+		if time.Since(a.lastMoveAt) >= dragSettleWait {
+			a.settleWindowMove()
+		}
+		return
+	}
 	if !a.railVisible || a.railWin == nil || a.railWin.IsDestroyed() {
 		return
 	}
 	cursor := mygo.Screen.CursorScreenPoint()
 	railBounds := a.railWin.Bounds()
+	disp := mygo.Screen.DisplayMatching(railBounds)
 	now := time.Now()
 
-	inCard := false
-	if a.cardWin != nil && !a.cardWin.IsDestroyed() && a.cardWin.IsVisible() {
-		if PointInRect(cursor, a.cardWin.Bounds(), 8) {
-			inCard = true
-		}
-	}
+	cardVisible := a.cardWin != nil && !a.cardWin.IsDestroyed() && a.cardWin.IsVisible()
+	inCard := cardVisible && PointInRect(cursor, a.cardWin.Bounds(), 6)
+	inEdge := a.cfg.AutoCollapse && a.cfg.DockEdge.IsDocked() && IsCursorOnDockEdge(disp.WorkArea, disp.Bounds, cursor, a.cfg.DockEdge)
 
 	inRail := false
-	if a.cfg.AutoCollapse && !a.railExpanded {
+	if a.cfg.AutoCollapse && a.cfg.DockEdge.IsDocked() && !a.railExpanded {
 		w, h := a.railWin.Size()
 		slivers := ComputeSliverInputRegion(w, h, a.cfg, false)
-		for _, sr := range slivers {
-			screenSliver := mygo.Rectangle{
-				X:      railBounds.X + sr.X,
-				Y:      railBounds.Y + sr.Y,
-				Width:  sr.Width,
-				Height: sr.Height,
-			}
-			if PointInRect(cursor, screenSliver, 4) {
-				inRail = true
-				break
+		hitTrigger := inEdge
+		if !hitTrigger {
+			for _, sr := range slivers {
+				screenSliver := mygo.Rectangle{
+					X:      railBounds.X + sr.X,
+					Y:      railBounds.Y + sr.Y,
+					Width:  sr.Width,
+					Height: sr.Height,
+				}
+				if PointInRect(cursor, screenSliver, 8) {
+					hitTrigger = true
+					break
+				}
 			}
 		}
-		if inRail {
+		if hitTrigger {
 			a.railExpanded = true
 			a.railState.Expanded = true
 			a.collapseAt = time.Time{}
+			if !PointInRect(cursor, railBounds, 6) {
+				a.edgeGraceUntil = now.Add(edgeRevealGrace)
+			} else {
+				a.edgeGraceUntil = time.Time{}
+			}
 			a.updateRailInputRegion()
 			a.railWin.Invalidate()
+			inRail = PointInRect(cursor, railBounds, 6)
 		}
 	} else {
-		inRail = PointInRect(cursor, railBounds, 4)
+		inRail = PointInRect(cursor, railBounds, 6)
 	}
 
 	if inCard || inRail {
 		a.cardHideAt = time.Time{}
 		a.collapseAt = time.Time{}
+		a.edgeGraceUntil = time.Time{}
 		return
 	}
 
-	if a.selectedSlotID != "" {
-		return
-	}
-
-	if !a.cardHideAt.IsZero() && now.After(a.cardHideAt) {
+	if cardVisible {
+		if a.cardHideAt.IsZero() {
+			a.cardHideAt = now.Add(cardHideGrace)
+		} else if now.After(a.cardHideAt) {
+			a.hoveredSlotID = ""
+			a.selectedSlotID = ""
+			a.railState.HoveredSlotID = ""
+			a.railState.SelectedSlotID = ""
+			a.hideCard()
+			a.railWin.Invalidate()
+		}
+	} else if !a.cardHideAt.IsZero() && now.After(a.cardHideAt) {
 		a.hideCard()
 	}
 
-	if a.cfg.AutoCollapse && a.railExpanded && (a.cardWin == nil || !a.cardWin.IsVisible()) {
-		if a.collapseAt.IsZero() {
+	if a.cfg.AutoCollapse && a.cfg.DockEdge.IsDocked() && a.railExpanded && (a.cardWin == nil || !a.cardWin.IsVisible()) {
+		if inEdge || (!a.edgeGraceUntil.IsZero() && now.Before(a.edgeGraceUntil)) {
+			a.collapseAt = now.Add(railCollapseWait)
+		} else if a.collapseAt.IsZero() {
 			a.collapseAt = now.Add(railCollapseWait)
 		} else if now.After(a.collapseAt) {
 			a.collapseAt = time.Time{}
+			a.edgeGraceUntil = time.Time{}
 			a.railExpanded = false
 			a.railState.Expanded = false
 			a.updateRailInputRegion()

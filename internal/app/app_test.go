@@ -80,6 +80,11 @@ func TestComputeSliverInputRegion(t *testing.T) {
 	if len(reg) != 1 || reg[0].Y+reg[0].Height != 64 || reg[0].Width != 300 {
 		t.Fatalf("unexpected DockBottom sliver region: %+v", reg)
 	}
+
+	cfg.DockEdge = model.DockFloating
+	if got := ComputeSliverInputRegion(64, 300, cfg, false); got != nil {
+		t.Fatalf("expected nil input region when DockFloating, got %+v", got)
+	}
 }
 
 func TestCardPlacementAndPointerCenter(t *testing.T) {
@@ -136,5 +141,99 @@ func TestUpdateDockedRatioAndAlertSummary(t *testing.T) {
 	}
 	if tip != "Magpie Pulse · Claude 80%" {
 		t.Fatalf("unexpected tip: %q", tip)
+	}
+}
+
+func TestDetectSnapEdgeAndFloatingDetach(t *testing.T) {
+	wa := mygo.Rectangle{X: 0, Y: 38, Width: 1512, Height: 944}
+
+	// Floating window in center stays floating.
+	mid := mygo.Rectangle{X: 700, Y: 400, Width: 64, Height: 240}
+	if edge, snapped := DetectSnapEdge(wa, mid, mygo.Point{X: 730, Y: 420}, model.DockFloating); snapped || edge != model.DockFloating {
+		t.Fatalf("center window got (%q, %v), want (floating, false)", edge, snapped)
+	}
+
+	// Floating window dragged near right edge snaps to DockRight.
+	nearRight := mygo.Rectangle{X: 1512 - 64 - 18, Y: 360, Width: 64, Height: 240}
+	if edge, snapped := DetectSnapEdge(wa, nearRight, mygo.Point{X: 1470, Y: 380}, model.DockFloating); !snapped || edge != model.DockRight {
+		t.Fatalf("near-right window got (%q, %v), want (right, true)", edge, snapped)
+	}
+
+	// Floating window dragged near left, top, bottom edges snaps accordingly.
+	nearLeft := mygo.Rectangle{X: 12, Y: 360, Width: 64, Height: 240}
+	if edge, snapped := DetectSnapEdge(wa, nearLeft, mygo.Point{X: 30, Y: 380}, model.DockFloating); !snapped || edge != model.DockLeft {
+		t.Fatalf("near-left window got (%q, %v), want (left, true)", edge, snapped)
+	}
+	nearTop := mygo.Rectangle{X: 600, Y: 50, Width: 64, Height: 240}
+	if edge, snapped := DetectSnapEdge(wa, nearTop, mygo.Point{X: 630, Y: 55}, model.DockFloating); !snapped || edge != model.DockTop {
+		t.Fatalf("near-top window got (%q, %v), want (top, true)", edge, snapped)
+	}
+	nearBottom := mygo.Rectangle{X: 600, Y: 38 + 944 - 240 - 15, Width: 64, Height: 240}
+	if edge, snapped := DetectSnapEdge(wa, nearBottom, mygo.Point{X: 630, Y: 950}, model.DockFloating); !snapped || edge != model.DockBottom {
+		t.Fatalf("near-bottom window got (%q, %v), want (bottom, true)", edge, snapped)
+	}
+
+	// DockRight slid all the way to the top-right corner stays DockRight.
+	topRight := mygo.Rectangle{X: 1512 - 64, Y: 38, Width: 64, Height: 280}
+	if edge, snapped := DetectSnapEdge(wa, topRight, mygo.Point{X: 1480, Y: 45}, model.DockRight); !snapped || edge != model.DockRight {
+		t.Fatalf("top-right slide got (%q, %v), want (right, true)", edge, snapped)
+	}
+
+	// DockRight dragged away from edge (> 32px) detaches into DockFloating.
+	detached := mygo.Rectangle{X: 1512 - 64 - 45, Y: 320, Width: 64, Height: 280}
+	if edge, snapped := DetectSnapEdge(wa, detached, mygo.Point{X: 1430, Y: 340}, model.DockRight); snapped || edge != model.DockFloating {
+		t.Fatalf("detached right rail got (%q, %v), want (floating, false)", edge, snapped)
+	}
+
+	// DockRight dragged straight across to Left edge snaps to DockLeft.
+	crossedLeft := mygo.Rectangle{X: 4, Y: 320, Width: 64, Height: 280}
+	if edge, snapped := DetectSnapEdge(wa, crossedLeft, mygo.Point{X: 20, Y: 340}, model.DockRight); !snapped || edge != model.DockLeft {
+		t.Fatalf("crossed-left rail got (%q, %v), want (left, true)", edge, snapped)
+	}
+}
+
+func TestComputeFloatingPositionAndTransitionRatio(t *testing.T) {
+	wa := mygo.Rectangle{X: 0, Y: 38, Width: 1512, Height: 944}
+	cfg := model.DefaultConfig()
+
+	// Horizontal DockTop dragged into middle -> floating centered on dragged rect.
+	draggedTop := mygo.Rectangle{X: 500, Y: 300, Width: 280, Height: 64}
+	fx, fy := ComputeFloatingPosition(wa, draggedTop, cfg, 3)
+	if fx < 580 || fx > 640 || fy < 180 || fy > 280 {
+		t.Fatalf("unexpected centered floating origin (%d, %d)", fx, fy)
+	}
+
+	// Vertical floating dragged to center-top -> DockTop ratio ~ 0.5.
+	fltCenter := mygo.Rectangle{X: 724, Y: 42, Width: 64, Height: 240}
+	ratio := UpdateDockedRatioForTransition(wa, fltCenter, model.DockTop, cfg, 3)
+	if ratio < 0.45 || ratio > 0.55 {
+		t.Fatalf("transition ratio=%v, want ~0.5", ratio)
+	}
+}
+
+func TestIsCursorOnDockEdge(t *testing.T) {
+	display := mygo.Rectangle{X: 0, Y: 0, Width: 1512, Height: 982}
+	wa := mygo.Rectangle{X: 0, Y: 38, Width: 1512, Height: 910} // Dock at bottom (34px) + menu bar (38px)
+
+	if !IsCursorOnDockEdge(wa, display, mygo.Point{X: 1511, Y: 200}, model.DockRight) {
+		t.Fatalf("expected right edge hit outside rail Y bounds")
+	}
+	if IsCursorOnDockEdge(wa, display, mygo.Point{X: 1511, Y: 5}, model.DockRight) {
+		t.Fatalf("expected top-right corner guard to ignore cursor")
+	}
+	if IsCursorOnDockEdge(wa, display, mygo.Point{X: 1480, Y: 200}, model.DockRight) {
+		t.Fatalf("expected cursor 32px from right edge not to trigger")
+	}
+	if !IsCursorOnDockEdge(wa, display, mygo.Point{X: 2, Y: 500}, model.DockLeft) {
+		t.Fatalf("expected left edge hit")
+	}
+	if !IsCursorOnDockEdge(wa, display, mygo.Point{X: 700, Y: 1}, model.DockTop) {
+		t.Fatalf("expected top screen edge hit through menu bar")
+	}
+	if !IsCursorOnDockEdge(wa, display, mygo.Point{X: 700, Y: 980}, model.DockBottom) {
+		t.Fatalf("expected bottom screen edge hit even when macOS Dock is at bottom")
+	}
+	if IsCursorOnDockEdge(wa, display, mygo.Point{X: 1511, Y: 200}, model.DockFloating) {
+		t.Fatalf("expected DockFloating not to match edge")
 	}
 }
