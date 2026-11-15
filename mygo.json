@@ -2,7 +2,7 @@
   "name": "Magpie Pulse",
   "slug": "magpie-pulse",
   "identifier": "dev.magpie.pulse",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "out": "build",
   "updates": {
     "publicKey": "DW1nuZZ4DtFDb5qHgTH6FUfAaEEqrek2Mqm5u9g+L9I=",
