@@ -1,6 +1,8 @@
 package model
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -151,5 +153,39 @@ func TestUsageTintAndMetrics(t *testing.T) {
 	mr := ComputeMetrics(cfg)
 	if mr.CornerRadius+mr.FlareWidth != mr.Width {
 		t.Fatalf("roundEnds: expected corner+flare == width, got %v + %v != %v", mr.CornerRadius, mr.FlareWidth, mr.Width)
+	}
+}
+
+func TestOpenAtLoginConfigDefaultsAndPersistence(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	if !DefaultConfig().OpenAtLogin {
+		t.Fatal("expected DefaultConfig().OpenAtLogin to be true")
+	}
+	if got := LoadConfig(); !got.OpenAtLogin {
+		t.Fatal("expected LoadConfig() with no file to default OpenAtLogin to true")
+	}
+
+	// Existing config files that predate OpenAtLogin should also default it to true.
+	cfgPath := ConfigPath()
+	if err := os.MkdirAll(filepath.Dir(cfgPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfgPath, []byte(`{"magpieUrl":"http://127.0.0.1:3425"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := LoadConfig(); !got.OpenAtLogin {
+		t.Fatal("expected LoadConfig() with legacy config missing openAtLogin to default to true")
+	}
+
+	cfg := LoadConfig()
+	cfg.OpenAtLogin = false
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	reloaded := LoadConfig()
+	if reloaded.OpenAtLogin {
+		t.Fatal("expected OpenAtLogin=false to persist across SaveConfig/LoadConfig")
 	}
 }

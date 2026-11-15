@@ -106,6 +106,25 @@ func TestSettingsTabsAndControls(t *testing.T) {
 		t.Fatalf("expected showPanelCalls=1, got %d", showPanelCalls)
 	}
 
+	if !st.Config.OpenAtLogin {
+		t.Fatalf("expected OpenAtLogin=true by default")
+	}
+	if err := tt.Click("开机启动"); err != nil {
+		t.Fatalf("click 开机启动 failed: %v", err)
+	}
+	if st.Config.OpenAtLogin {
+		t.Fatalf("expected OpenAtLogin=false after toggle")
+	}
+	if len(*configs) == 0 || (*configs)[len(*configs)-1].OpenAtLogin {
+		t.Fatalf("expected OnConfigChange with OpenAtLogin=false")
+	}
+	if err := tt.Click("开机启动"); err != nil {
+		t.Fatalf("second click 开机启动 failed: %v", err)
+	}
+	if !st.Config.OpenAtLogin {
+		t.Fatalf("expected OpenAtLogin=true after second toggle")
+	}
+
 	if err := tt.Click("60s"); err != nil {
 		t.Fatalf("click 60s failed: %v", err)
 	}
