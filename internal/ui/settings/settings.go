@@ -307,6 +307,12 @@ func renderGeneralPane(c *ui.Context, st *SettingsState) {
 		})
 
 		settingsCard(c, "系统集成与窗口", func() {
+			settingsSwitchRow(c, "open-at-login", "开机启动", "登录系统时自动启动 Magpie Pulse", &st.Config.OpenAtLogin, func() {
+				st.emitConfigChange()
+			})
+
+			ui.Divider(c)
+
 			settingsSwitchRow(c, "show-in-dock", "在程序坞显示图标", "开启后应用图标将显示在 macOS Dock 栏中", &st.Config.ShowInDock, func() {
 				st.emitConfigChange()
 			})

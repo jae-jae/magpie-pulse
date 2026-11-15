@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"sync"
@@ -72,6 +73,10 @@ type App struct {
 
 	stopCh   chan struct{}
 	stopOnce sync.Once
+
+	setOpenAtLogin func(bool) error
+	getOpenAtLogin func() bool
+	canAutoLogin   func() bool
 }
 
 // New constructs the application controller and loads persisted configuration.
@@ -168,6 +173,7 @@ func (a *App) Run() error {
 
 func (a *App) ready() {
 	a.syncUpdateState()
+	a.syncOpenAtLoginOnReady()
 	updater.OnChange(func() {
 		a.syncUpdateState()
 		if a.settingsWin != nil && !a.settingsWin.IsDestroyed() {
@@ -206,6 +212,42 @@ func applyActivationPolicy(showInDock bool) {
 		mygo.App.SetActivationPolicy(mygo.ActivationPolicyRegular)
 	} else {
 		mygo.App.SetActivationPolicy(mygo.ActivationPolicyAccessory)
+	}
+}
+
+func (a *App) applyOpenAtLogin(enabled bool) {
+	if a.setOpenAtLogin != nil {
+		if err := a.setOpenAtLogin(enabled); err != nil {
+			log.Printf("magpie-pulse: set open at login (%v): %v", enabled, err)
+		}
+		return
+	}
+	if !mygo.App.IsReady() {
+		return
+	}
+	if err := mygo.App.SetOpenAtLogin(enabled); err != nil {
+		log.Printf("magpie-pulse: set open at login (%v): %v", enabled, err)
+	}
+}
+
+func (a *App) syncOpenAtLoginOnReady() {
+	canAuto := a.canAutoLogin
+	if canAuto == nil {
+		canAuto = func() bool {
+			return !mygo.IsDev() && mygo.App.IsReady() && mygo.App.IsPackaged()
+		}
+	}
+	if !canAuto() {
+		return
+	}
+	current := false
+	if a.getOpenAtLogin != nil {
+		current = a.getOpenAtLogin()
+	} else {
+		current = mygo.App.OpenAtLogin()
+	}
+	if current != a.cfg.OpenAtLogin {
+		a.applyOpenAtLogin(a.cfg.OpenAtLogin)
 	}
 }
 
@@ -836,6 +878,9 @@ func (a *App) applyConfig(next model.Config) {
 
 	if prev.ShowInDock != next.ShowInDock {
 		applyActivationPolicy(next.ShowInDock)
+	}
+	if prev.OpenAtLogin != next.OpenAtLogin {
+		a.applyOpenAtLogin(next.OpenAtLogin)
 	}
 
 	a.service.UpdateConfig(next)
