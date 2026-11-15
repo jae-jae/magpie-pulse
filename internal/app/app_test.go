@@ -237,3 +237,22 @@ func TestIsCursorOnDockEdge(t *testing.T) {
 		t.Fatalf("expected DockFloating not to match edge")
 	}
 }
+
+func TestWorstAlertSummaryLocale(t *testing.T) {
+	cfg := model.DefaultConfig()
+	offlineSnap := model.Snapshot{Connected: false, ConnectionErr: "dial failed"}
+	if _, tip := WorstAlertSummaryLocale("en", nil, cfg, offlineSnap); tip != "Magpie Pulse · Offline" {
+		t.Fatalf("en offline tip = %q", tip)
+	}
+	if _, tip := WorstAlertSummaryLocale("zh-Hans", nil, cfg, offlineSnap); tip != "Magpie Pulse · 离线" {
+		t.Fatalf("zh offline tip = %q", tip)
+	}
+
+	accSnap := model.Snapshot{Connected: true, Accounts: make([]model.AccountQuota, 2)}
+	if _, tip := WorstAlertSummaryLocale("en", nil, cfg, accSnap); tip != "Magpie Pulse · 2 accounts" {
+		t.Fatalf("en accounts tip = %q", tip)
+	}
+	if _, tip := WorstAlertSummaryLocale("zh-Hans", nil, cfg, accSnap); tip != "Magpie Pulse · 2 个账号" {
+		t.Fatalf("zh accounts tip = %q", tip)
+	}
+}

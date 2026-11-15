@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"magpie-pulse/internal/i18n"
 	"magpie-pulse/internal/icons"
 	"magpie-pulse/internal/model"
 
@@ -15,13 +16,15 @@ type tintPreset struct {
 	Label string
 }
 
-var ringTintPresets = []tintPreset{
-	{Hex: "", Label: "自动(按用量)"},
-	{Hex: "#4099FF", Label: "Azure #4099FF"},
-	{Hex: "#B380FF", Label: "Iris #B380FF"},
-	{Hex: "#FF70B8", Label: "Rose #FF70B8"},
-	{Hex: "#FF8F33", Label: "Amber #FF8F33"},
-	{Hex: "#33D1D1", Label: "Teal #33D1D1"},
+func ringTintPresetsFor(msg *i18n.Messages) []tintPreset {
+	return []tintPreset{
+		{Hex: "", Label: msg.RingTintAuto},
+		{Hex: "#4099FF", Label: msg.RingTintAzure},
+		{Hex: "#B380FF", Label: msg.RingTintIris},
+		{Hex: "#FF70B8", Label: msg.RingTintRose},
+		{Hex: "#FF8F33", Label: msg.RingTintAmber},
+		{Hex: "#33D1D1", Label: msg.RingTintTeal},
+	}
 }
 
 // AccountsPane renders the accounts overview, visibility switches, and ring tint presets.
@@ -30,6 +33,7 @@ func AccountsPane(c *ui.Context, st *SettingsState) {
 		return
 	}
 	st.ensureDefaults()
+	msg := i18n.For(st.Config.Language, c.Locale())
 	t := c.Theme()
 
 	accounts := st.Snapshot.Accounts
@@ -44,10 +48,10 @@ func AccountsPane(c *ui.Context, st *SettingsState) {
 		ui.Column(c).FillWidth().AlignItems(ui.Center).Shrink(0).Children(func() {
 			ui.Row(c).FillWidth().MaxWidth(paneMaxWidth).Padding(16, 20, 12, 20).Justify(ui.SpaceBetween).AlignItems(ui.Center).Children(func() {
 				ui.Column(c).Gap(2).Children(func() {
-					ui.Textf(c, "共 %d 个账号", len(accounts)).FontWeight(600)
-					ui.Textf(c, "面板当前显示 %d 个账号", visibleCount).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
+					ui.Text(c, msg.FormatAccountsTotal(len(accounts))).FontWeight(600)
+					ui.Text(c, msg.FormatAccountsVisible(visibleCount)).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
 				})
-				ui.Button(c.Key("refresh-now"), "").Label("立即刷新").
+				ui.Button(c.Key("refresh-now"), "").Label(msg.RefreshNow).
 					OnClick(func() {
 						if st.OnRefreshNow != nil {
 							st.OnRefreshNow()
@@ -55,7 +59,7 @@ func AccountsPane(c *ui.Context, st *SettingsState) {
 					}).
 					Children(func() {
 						ui.Icon(c, icons.RefreshIcon).Size(14, 14)
-						ui.Text(c, "立即刷新").SingleLine()
+						ui.Text(c, msg.RefreshNow).SingleLine()
 					})
 			})
 		})
@@ -68,8 +72,8 @@ func AccountsPane(c *ui.Context, st *SettingsState) {
 					if len(accounts) == 0 {
 						ui.Column(c).Padding(24).Gap(8).Center().Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
 							ui.Icon(c, icons.AccountsIcon).Size(28, 28).TextColor(t.TextMuted)
-							ui.Text(c, "暂无账号数据").FontWeight(600)
-							ui.Text(c, "请确认 Magpie 服务已启动，或点击“立即刷新”重新拉取。").FontSize(t.FontSize - 1).TextColor(t.TextMuted)
+							ui.Text(c, msg.EmptyAccountsTitle).FontWeight(600)
+							ui.Text(c, msg.EmptyAccountsDesc).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
 						})
 						return
 					}
@@ -82,7 +86,7 @@ func AccountsPane(c *ui.Context, st *SettingsState) {
 						if seenKeys[accKey] > 1 {
 							uniqueKey = fmt.Sprintf("%s#%d", accKey, seenKeys[accKey])
 						}
-						renderAccountCard(c.Key("acc-"+uniqueKey), st, acc, accKey)
+						renderAccountCard(c.Key("acc-"+uniqueKey), st, acc, accKey, msg)
 					}
 				})
 			})
@@ -90,11 +94,12 @@ func AccountsPane(c *ui.Context, st *SettingsState) {
 	})
 }
 
-func renderAccountCard(c *ui.Context, st *SettingsState, acc model.AccountQuota, accKey string) {
+func renderAccountCard(c *ui.Context, st *SettingsState, acc model.AccountQuota, accKey string, msg *i18n.Messages) {
 	t := c.Theme()
 	hasError := strings.TrimSpace(acc.Error) != ""
-	statusLabel, statusColor := accountStatusBadge(t, acc, hasError)
+	statusLabel, statusColor := accountStatusBadge(t, acc, hasError, msg)
 	maxUsed, hasNumeric := highestWindowUsage(acc)
+	ringTintPresets := ringTintPresetsFor(msg)
 
 	ui.Column(c).Padding(14, 16).Gap(10).Radius(10).Background(t.Surface).Border(1, t.Border).Children(func() {
 		ui.Row(c).Justify(ui.SpaceBetween).AlignItems(ui.Center).Gap(12).Children(func() {
@@ -104,7 +109,7 @@ func renderAccountCard(c *ui.Context, st *SettingsState, acc model.AccountQuota,
 				})
 				ui.Column(c).Gap(2).Grow(1).MinWidth(0).Children(func() {
 					ui.Row(c).Gap(6).AlignItems(ui.Center).Wrap().Children(func() {
-						ui.Text(c, acc.DisplayName()).FontWeight(600).SingleLine()
+						ui.Text(c, acc.DisplayNameLocale(msg.Locale)).FontWeight(600).SingleLine()
 						if strings.TrimSpace(acc.Plan) != "" {
 							ui.Badge(c, acc.Plan)
 						}
@@ -122,10 +127,10 @@ func renderAccountCard(c *ui.Context, st *SettingsState, acc model.AccountQuota,
 				if hasNumeric {
 					pctColor := model.UsageTintColor(maxUsed/100.0, maxUsed >= 100, st.Config.WarningThreshold, !t.Dark)
 					ui.Textf(c, "%.0f%%", maxUsed).FontSize(16).Bold().TextColor(pctColor).SingleLine()
-					ui.Text(c, "最高窗口用量").FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+					ui.Text(c, msg.HighestWindowUsage).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 				} else if len(acc.Windows) > 0 && strings.TrimSpace(acc.Windows[0].Display) != "" {
 					ui.Text(c, acc.Windows[0].Display).FontSize(t.FontSize - 1).FontWeight(500).SingleLine()
-					ui.Text(c, "当前状态").FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
+					ui.Text(c, msg.CurrentStatus).FontSize(t.FontSize - 2).TextColor(t.TextMuted).SingleLine()
 				} else {
 					ui.Text(c, "--").FontSize(15).TextColor(t.TextMuted).SingleLine()
 				}
@@ -143,7 +148,7 @@ func renderAccountCard(c *ui.Context, st *SettingsState, acc model.AccountQuota,
 
 		ui.Row(c).Justify(ui.SpaceBetween).AlignItems(ui.Center).Gap(12).Wrap().Children(func() {
 			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				ui.Text(c, "圆环颜色").FontSize(t.FontSize - 1).TextColor(t.TextMuted)
+				ui.Text(c, msg.RingColor).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
 				currentTint := strings.TrimSpace(st.Config.RingTints[accKey])
 				for _, preset := range ringTintPresets {
 					hex := preset.Hex
@@ -201,9 +206,9 @@ func renderAccountCard(c *ui.Context, st *SettingsState, acc model.AccountQuota,
 
 			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
 				visible := !st.Config.HiddenAccounts[accKey]
-				lbl := ui.Text(c, "在面板中显示").FontSize(t.FontSize - 1).TextColor(t.TextMuted)
+				lbl := ui.Text(c, msg.ShowInPanel).FontSize(t.FontSize - 1).TextColor(t.TextMuted)
 				ui.Switch(c.Key("visible"), &visible).
-					Label("在面板中显示").
+					Label(msg.ShowInPanel).
 					LabelledBy(lbl).
 					OnChange(func() {
 						if st.Config.HiddenAccounts == nil {
@@ -221,14 +226,14 @@ func renderAccountCard(c *ui.Context, st *SettingsState, acc model.AccountQuota,
 	})
 }
 
-func accountStatusBadge(t *ui.Theme, acc model.AccountQuota, hasError bool) (string, ui.Color) {
+func accountStatusBadge(t *ui.Theme, acc model.AccountQuota, hasError bool, msg *i18n.Messages) (string, ui.Color) {
 	if hasError {
-		return "异常", t.Danger
+		return msg.AccountStatusError, t.Danger
 	}
 	if acc.CachedOnly || acc.Disabled {
-		return "本地缓存", t.Warning
+		return msg.AccountStatusCached, t.Warning
 	}
-	return "在线", t.Success
+	return msg.AccountStatusOnline, t.Success
 }
 
 func highestWindowUsage(acc model.AccountQuota) (float64, bool) {

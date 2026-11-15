@@ -598,3 +598,104 @@ func TestCardViewOrdersShortCycleAboveLongCycle(t *testing.T) {
 		t.Fatalf("expected short-cycle (Y=%v) above long-cycle (Y=%v)", shortBox.Bounds.Y, longBox.Bounds.Y)
 	}
 }
+
+func TestCardViewAndRailViewChineseLocale(t *testing.T) {
+	now := time.Now()
+	acc := model.AccountQuota{
+		Provider:   "antigravity",
+		Name:       "Antigravity",
+		Plan:       "Google AI Pro",
+		User:       "alice@example.com",
+		ReadAt:     now.Add(-3 * time.Minute).Format(time.RFC3339),
+		CachedOnly: true,
+		Windows: []model.QuotaWindow{
+			{
+				Name:      "Gemini",
+				Pool:      "Gemini",
+				Used:      14,
+				Remaining: 86,
+				ResetsAt:  now.Add(4 * time.Hour).Format(time.RFC3339),
+				Holds: &model.WindowHolds{
+					Routed: &model.RoutedUsage{Calls: 1603, Tokens: 41_800_000, Cost: 101.50},
+				},
+			},
+			{Name: "Claude & GPT", Pool: "Claude & GPT", Used: 45, Remaining: 55, ResetsAt: now.Add(4 * time.Hour).Format(time.RFC3339)},
+			{Name: "gemini-2.5-pro", Pool: "Gemini", Family: "gemini", Used: 14, Remaining: 86},
+			{Name: "gemini-2.5-flash", Pool: "Gemini", Family: "gemini", Used: 8, Remaining: 92},
+			{Name: "claude-sonnet-4", Pool: "Claude & GPT", Family: "claude", Used: 45, Remaining: 55},
+			{Name: "claude-opus-4", Pool: "Claude & GPT", Family: "claude", Used: 30, Remaining: 70},
+			{Name: "gpt-4o", Pool: "Claude & GPT", Family: "gpt", Used: 20, Remaining: 80},
+			{Name: "o3-mini", Pool: "Claude & GPT", Family: "gpt", Used: 10, Remaining: 90},
+		},
+	}
+	cfg := model.DefaultConfig()
+	cfg.SplitPools = false
+	cfg.ShowDetailedCard = true
+	cfg.ShowRemaining = true
+	slots := model.BuildRailSlots([]model.AccountQuota{acc}, cfg, now)
+
+	state := &CardState{
+		Slot:   &slots[0],
+		Config: cfg,
+		History: &model.AccountHistory{
+			Provider: "antigravity",
+			User:     "alice@example.com",
+			Lines: []model.HistoryLine{
+				{
+					Name: "Claude & GPT",
+					Points: []model.HistoryPoint{
+						{At: now.Add(-2 * time.Hour).Format(time.RFC3339), Left: 80},
+						{At: now.Format(time.RFC3339), Left: 55},
+					},
+				},
+			},
+		},
+		UsageToday: &model.UsageSummary{Input: 1_200_000, Output: 300_000, Cost: 4.25},
+		Usage7d:    &model.UsageSummary{Input: 12_000_000, Output: 3_500_000, Cost: 38.10},
+		Usage30d:   &model.UsageSummary{Input: 40_000_000, Output: 11_000_000, Cost: 125.90},
+		OnRefresh:  func() {},
+	}
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		CardView(c, state)
+	}, 340, 560)
+	tt.SetLocale("zh-Hans")
+	tt.Frame()
+
+	for _, want := range []string{
+		"Antigravity 用量",
+		"本地缓存",
+		"41.8M tokens · $101.50 · 1,603 次调用",
+		"展开全部 8 个模型限额",
+		"剩余 86%",
+		"今日",
+		"7 天",
+		"30 天",
+		"Claude & GPT 趋势",
+		"剩余 55%",
+	} {
+		if !tt.HasText(want) {
+			t.Fatalf("missing Chinese card text %q, got %v", want, tt.Texts())
+		}
+	}
+	if _, ok := tt.Access("刷新"); !ok {
+		t.Fatalf("missing Chinese refresh button label, got %v", tt.Texts())
+	}
+
+	if err := tt.Click("展开全部 8 个模型限额"); err != nil {
+		t.Fatalf("click expand models failed: %v", err)
+	}
+	if !tt.HasText("仅显示汇总") {
+		t.Fatalf("expected Chinese collapse toggle, got %v", tt.Texts())
+	}
+
+	// Empty rail settings button label in Chinese.
+	emptyCfg := model.DefaultConfig()
+	emptyCfg.Language = model.LangZhHans
+	emptyTest := ui.NewTester(func(c *ui.Context) {
+		RailView(c, &RailState{Config: emptyCfg})
+	}, 120, 260)
+	if _, ok := emptyTest.Access("设置"); !ok {
+		t.Fatalf("missing Chinese empty rail settings label, got %v", emptyTest.Texts())
+	}
+}

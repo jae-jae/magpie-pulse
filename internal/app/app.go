@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"magpie-pulse/internal/i18n"
 	"magpie-pulse/internal/icons"
 	"magpie-pulse/internal/magpie"
 	"magpie-pulse/internal/model"
@@ -16,6 +17,7 @@ import (
 	"magpie-pulse/internal/ui/settings"
 
 	"github.com/egoist/mygo"
+	_ "github.com/egoist/mygo/locales/zh-Hans"
 	"github.com/egoist/mygo/plugins/updater"
 	"github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
@@ -68,6 +70,7 @@ type App struct {
 	suppressMove   bool
 	lastSlotCount  int
 	trayAlert      bool
+	lastTestInfo   *magpie.ServerInfo
 	watchActive    atomic.Bool
 
 	stopCh   chan struct{}
@@ -147,6 +150,8 @@ func (a *App) Run() error {
 	if strings.TrimSpace(mygo.App.Version()) == "" {
 		mygo.App.SetVersion("0.1.0-dev")
 	}
+	mygo.App.SetLanguages(i18n.LocaleEn, i18n.LocaleZhHans)
+	applyAppLocale(a.cfg.Language)
 	applyActivationPolicy(a.cfg.ShowInDock)
 
 	mygo.App.OnWindowAllClosed(func() {})
@@ -173,6 +178,9 @@ func (a *App) ready() {
 		if a.settingsWin != nil && !a.settingsWin.IsDestroyed() {
 			a.settingsWin.Invalidate()
 		}
+	})
+	mygo.App.OnLocaleChanged(func(locale string) {
+		a.onLocaleChanged()
 	})
 	a.setupTray()
 	a.createRailWindow(nil)
@@ -222,21 +230,69 @@ func (a *App) setupService() {
 		if !mygo.NotificationsSupported() {
 			return
 		}
-		title := fmt.Sprintf("%s Quota Alert", ev.Title)
-		body := fmt.Sprintf("%s is at %.0f%% used", ev.WindowName, ev.UsedPct)
+		msg := i18n.ByLocale(a.activeLocale())
+		title := fmt.Sprintf(msg.AlertTitleFmt, ev.Title)
+		body := fmt.Sprintf(msg.AlertBodyUsedFmt, ev.WindowName, ev.UsedPct)
 		if ev.Spent {
-			body = fmt.Sprintf("%s quota exhausted (100%% used)", ev.WindowName)
+			body = fmt.Sprintf(msg.AlertBodyExhausted, ev.WindowName)
 		}
 		n := mygo.NewNotification(mygo.NotificationOptions{
 			ID:       fmt.Sprintf("magpie-pulse:%s:%s", ev.AccountKey, ev.WindowName),
 			Title:    title,
 			Body:     body,
-			Subtitle: "Magpie Pulse",
+			Subtitle: msg.AppName,
 			Group:    "quota-alerts",
 		})
 		go func() {
 			_ = n.Show()
 		}()
+	}
+}
+
+func (a *App) activeLocale() string {
+	switch model.NormalizeLanguage(a.cfg.Language) {
+	case model.LangZhHans:
+		return i18n.LocaleZhHans
+	case model.LangEn:
+		return i18n.LocaleEn
+	default:
+		if mygo.App.IsReady() {
+			return i18n.Resolve(a.cfg.Language, mygo.App.Locale())
+		}
+		return i18n.LocaleEn
+	}
+}
+
+func applyAppLocale(lang model.Language) {
+	switch model.NormalizeLanguage(lang) {
+	case model.LangZhHans:
+		mygo.App.SetLocale(i18n.LocaleZhHans)
+	case model.LangEn:
+		mygo.App.SetLocale(i18n.LocaleEn)
+	default:
+		mygo.App.SetLocale("")
+	}
+}
+
+func (a *App) onLocaleChanged() {
+	msg := i18n.ByLocale(a.activeLocale())
+	a.rebuildTrayMenu()
+	_, tip := WorstAlertSummaryLocale(a.activeLocale(), a.slots, a.cfg, a.snap)
+	if a.tray != nil {
+		a.tray.SetToolTip(tip)
+	}
+	if a.settingsState.TestOK && a.lastTestInfo != nil {
+		a.settingsState.TestStatus = msg.FormatConnected(a.lastTestInfo.Version, a.lastTestInfo.Models)
+	}
+	if a.settingsWin != nil && !a.settingsWin.IsDestroyed() {
+		a.settingsWin.SetTitle(msg.SettingsWindowTitle)
+		a.settingsWin.Invalidate()
+	}
+	if a.railWin != nil && !a.railWin.IsDestroyed() {
+		a.railWin.Invalidate()
+	}
+	if a.cardWin != nil && !a.cardWin.IsDestroyed() && a.cardWin.IsVisible() {
+		a.cardWin.Invalidate()
 	}
 }
 
@@ -251,7 +307,7 @@ func (a *App) applySnapshot(snap model.Snapshot) {
 		a.layoutRailWindow()
 	}
 
-	alert, tip := WorstAlertSummary(a.slots, a.cfg, a.snap)
+	alert, tip := WorstAlertSummaryLocale(a.activeLocale(), a.slots, a.cfg, a.snap)
 	if a.tray != nil {
 		if alert != a.trayAlert {
 			a.trayAlert = alert
@@ -275,14 +331,44 @@ func (a *App) applySnapshot(snap model.Snapshot) {
 }
 
 func (a *App) setupTray() {
+	a.rebuildTrayMenu()
+
+	tray, err := mygo.NewTray(mygo.TrayOptions{
+		ID:             "magpie-pulse",
+		Icon:           icons.TrayIconPNG(false),
+		IconIsTemplate: true,
+		ToolTip:        "Magpie Pulse",
+	})
+	if err != nil {
+		return
+	}
+	a.tray = tray
+	a.tray.OnClick(func() {
+		a.toggleRail()
+	})
+	a.tray.OnRightClick(func() {
+		a.syncMenuItems()
+		a.trayMenu.Popup(nil)
+	})
+}
+
+func (a *App) rebuildTrayMenu() {
+	msg := i18n.ByLocale(a.activeLocale())
+	a.surfaceItems = map[model.SurfaceMode]*mygo.MenuItem{}
+	a.dockItems = map[model.DockEdge]*mygo.MenuItem{}
+
+	toggleLabel := msg.TrayShowPanel
+	if a.railVisible {
+		toggleLabel = msg.TrayHidePanel
+	}
 	a.menuToggleRail = &mygo.MenuItem{
-		Label: "Hide Panel",
+		Label: toggleLabel,
 		Click: func(*mygo.MenuItem, *mygo.Window) {
 			a.toggleRail()
 		},
 	}
 	a.menuCached = &mygo.MenuItem{
-		Label:   "Show Cached Accounts",
+		Label:   msg.TrayShowCached,
 		Type:    mygo.MenuItemCheckbox,
 		Checked: a.cfg.IncludeCachedAccounts,
 		Click: func(*mygo.MenuItem, *mygo.Window) {
@@ -292,7 +378,7 @@ func (a *App) setupTray() {
 		},
 	}
 	a.menuAutoCollapse = &mygo.MenuItem{
-		Label:   "Auto-Collapse Edge",
+		Label:   msg.TrayAutoCollapse,
 		Type:    mygo.MenuItemCheckbox,
 		Checked: a.cfg.AutoCollapse,
 		Click: func(*mygo.MenuItem, *mygo.Window) {
@@ -306,9 +392,9 @@ func (a *App) setupTray() {
 		mode  model.SurfaceMode
 		label string
 	}{
-		{model.SurfaceDark, "Dark"},
-		{model.SurfaceLight, "Light"},
-		{model.SurfaceGlass, "Liquid Glass"},
+		{model.SurfaceDark, msg.TraySurfaceDark},
+		{model.SurfaceLight, msg.TraySurfaceLight},
+		{model.SurfaceGlass, msg.TraySurfaceGlass},
 	}
 	var surfaceSubmenu []*mygo.MenuItem
 	for _, def := range surfaceDefs {
@@ -331,11 +417,11 @@ func (a *App) setupTray() {
 		edge  model.DockEdge
 		label string
 	}{
-		{model.DockRight, "Right Edge"},
-		{model.DockLeft, "Left Edge"},
-		{model.DockTop, "Top Edge"},
-		{model.DockBottom, "Bottom Edge"},
-		{model.DockFloating, "Floating"},
+		{model.DockRight, msg.TrayDockRight},
+		{model.DockLeft, msg.TrayDockLeft},
+		{model.DockTop, msg.TrayDockTop},
+		{model.DockBottom, msg.TrayDockBottom},
+		{model.DockFloating, msg.TrayDockFloating},
 	}
 	var dockSubmenu []*mygo.MenuItem
 	for _, def := range dockDefs {
@@ -356,7 +442,7 @@ func (a *App) setupTray() {
 
 	a.trayMenu = mygo.NewMenu([]*mygo.MenuItem{
 		{
-			Label: "Refresh Now",
+			Label: msg.TrayRefreshNow,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.refreshNow()
 			},
@@ -366,56 +452,39 @@ func (a *App) setupTray() {
 		a.menuCached,
 		a.menuAutoCollapse,
 		{
-			Label:   "Surface",
+			Label:   msg.TraySurface,
 			Submenu: surfaceSubmenu,
 		},
 		{
-			Label:   "Dock Position",
+			Label:   msg.TrayDockPosition,
 			Submenu: dockSubmenu,
 		},
 		mygo.Separator(),
 		{
-			Label: "Settings...",
+			Label: msg.TraySettings,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.openSettings()
 			},
 		},
-			updater.MenuItem(),
+		updater.MenuItem(),
 		mygo.Separator(),
 		{
-			Label: "Quit Magpie Pulse",
+			Label: msg.TrayQuit,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.quitting = true
 				mygo.App.Quit()
 			},
 		},
 	})
-
-	tray, err := mygo.NewTray(mygo.TrayOptions{
-		ID:             "magpie-pulse",
-		Icon:           icons.TrayIconPNG(false),
-		IconIsTemplate: true,
-		ToolTip:        "Magpie Pulse",
-	})
-	if err != nil {
-		return
-	}
-	a.tray = tray
-	a.tray.OnClick(func() {
-		a.toggleRail()
-	})
-	a.tray.OnRightClick(func() {
-		a.syncMenuItems()
-		a.trayMenu.Popup(nil)
-	})
 }
 
 func (a *App) syncMenuItems() {
+	msg := i18n.ByLocale(a.activeLocale())
 	if a.menuToggleRail != nil {
 		if a.railVisible {
-			a.menuToggleRail.SetLabel("Hide Panel")
+			a.menuToggleRail.SetLabel(msg.TrayHidePanel)
 		} else {
-			a.menuToggleRail.SetLabel("Show Panel")
+			a.menuToggleRail.SetLabel(msg.TrayShowPanel)
 		}
 	}
 	if a.menuCached != nil {
@@ -809,7 +878,7 @@ func (a *App) openSettings() {
 	a.syncUpdateState()
 
 	win := mygo.NewWindow(mygo.WindowOptions{
-		Title:         "Magpie Pulse Settings",
+		Title:         i18n.ByLocale(a.activeLocale()).SettingsWindowTitle,
 		Width:         680,
 		Height:        600,
 		MinWidth:      620,
@@ -836,6 +905,10 @@ func (a *App) applyConfig(next model.Config) {
 
 	if prev.ShowInDock != next.ShowInDock {
 		applyActivationPolicy(next.ShowInDock)
+	}
+	langChanged := model.NormalizeLanguage(prev.Language) != model.NormalizeLanguage(next.Language)
+	if langChanged {
+		applyAppLocale(next.Language)
 	}
 
 	a.service.UpdateConfig(next)
@@ -881,7 +954,7 @@ func (a *App) applyConfig(next model.Config) {
 		}
 	}
 
-	alert, tip := WorstAlertSummary(a.slots, a.cfg, a.snap)
+	alert, tip := WorstAlertSummaryLocale(a.activeLocale(), a.slots, a.cfg, a.snap)
 	if a.tray != nil {
 		if alert != a.trayAlert {
 			a.trayAlert = alert
@@ -890,10 +963,14 @@ func (a *App) applyConfig(next model.Config) {
 		a.tray.SetToolTip(tip)
 	}
 
-	if a.settingsWin != nil && !a.settingsWin.IsDestroyed() {
-		a.settingsWin.Invalidate()
+	if langChanged {
+		a.onLocaleChanged()
+	} else {
+		if a.settingsWin != nil && !a.settingsWin.IsDestroyed() {
+			a.settingsWin.Invalidate()
+		}
+		a.syncMenuItems()
 	}
-	a.syncMenuItems()
 	a.updateWatchActive()
 }
 
@@ -908,6 +985,7 @@ func (a *App) refreshNow() {
 func (a *App) testConnection(rawURL string) {
 	a.settingsState.Testing = true
 	a.settingsState.TestStatus = ""
+	a.lastTestInfo = nil
 	if a.settingsWin != nil && !a.settingsWin.IsDestroyed() {
 		a.settingsWin.Invalidate()
 	}
@@ -924,18 +1002,12 @@ func (a *App) testConnection(rawURL string) {
 			if err != nil {
 				a.settingsState.TestOK = false
 				a.settingsState.TestStatus = err.Error()
+				a.lastTestInfo = nil
 				return
 			}
-			ver := strings.TrimSpace(info.Version)
-			if ver != "" && !strings.HasPrefix(ver, "v") {
-				ver = "v" + ver
-			}
+			a.lastTestInfo = &info
 			a.settingsState.TestOK = true
-			if ver == "" {
-				a.settingsState.TestStatus = fmt.Sprintf("Connected · %d models", info.Models)
-			} else {
-				a.settingsState.TestStatus = fmt.Sprintf("Connected · %s · %d models", ver, info.Models)
-			}
+			a.settingsState.TestStatus = i18n.ByLocale(a.activeLocale()).FormatConnected(info.Version, info.Models)
 		})
 	}()
 }
