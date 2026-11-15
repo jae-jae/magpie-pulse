@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"magpie-pulse/internal/i18n"
 	"magpie-pulse/internal/model"
 
 	"github.com/egoist/mygo"
@@ -329,11 +330,18 @@ func IsCursorOnDockEdge(workArea, displayBounds mygo.Rectangle, cursor mygo.Poin
 // WorstAlertSummary returns whether any visible slot has reached the warning or spent threshold,
 // plus a short status tooltip for the tray icon.
 func WorstAlertSummary(slots []model.RailSlot, cfg model.Config, snap model.Snapshot) (bool, string) {
+	return WorstAlertSummaryLocale(i18n.LocaleEn, slots, cfg, snap)
+}
+
+// WorstAlertSummaryLocale returns whether any visible slot has reached the warning or spent threshold,
+// plus a localized status tooltip for the tray icon.
+func WorstAlertSummaryLocale(locale string, slots []model.RailSlot, cfg model.Config, snap model.Snapshot) (bool, string) {
+	msg := i18n.For(cfg.Language, locale)
 	if !snap.Connected {
 		if snap.ConnectionErr != "" {
-			return false, "Magpie Pulse · Offline"
+			return false, msg.TooltipOffline
 		}
-		return false, "Magpie Pulse"
+		return false, msg.AppName
 	}
 	thresh := float64(cfg.WarningThreshold) / 100.0
 	alert := false
@@ -355,9 +363,9 @@ func WorstAlertSummary(slots []model.RailSlot, cfg model.Config, snap model.Snap
 		}
 	}
 	if maxName != "" {
-		return alert, fmt.Sprintf("Magpie Pulse · %s %.0f%%", maxName, maxPct)
+		return alert, fmt.Sprintf("%s · %s %.0f%%", msg.AppName, maxName, maxPct)
 	}
-	return alert, fmt.Sprintf("Magpie Pulse · %d accounts", len(snap.Accounts))
+	return alert, msg.FormatTooltipAccounts(len(snap.Accounts))
 }
 
 // PointInRect reports whether p falls within r expanded by pad DIPs on all sides.

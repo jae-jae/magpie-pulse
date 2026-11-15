@@ -85,10 +85,22 @@ func TestSettingsTabsAndControls(t *testing.T) {
 		SettingsView(c, st)
 	}, 860, 640)
 
+	// Default Language is Auto; with empty tester locale it resolves to English.
+	if !tt.HasText("Magpie API URL") {
+		t.Fatalf("expected English general tab content by default, got texts %v", tt.Texts())
+	}
+	if !tt.HasText("Connected · v0.5.0 · 12 models") {
+		t.Fatalf("expected English connection status text, got texts %v", tt.Texts())
+	}
+
+	// Simulate Chinese system locale while Language == Auto.
+	tt.SetLocale("zh-Hans")
+	tt.Frame()
+
 	if !tt.HasText("Magpie API 地址") {
 		t.Fatalf("expected general tab content, got texts %v", tt.Texts())
 	}
-	if !tt.HasText("Connected · v0.5.0 · 12 models") {
+	if !tt.HasText("已连接 · v0.5.0 · 12 个模型") {
 		t.Fatalf("expected connection status text, got texts %v", tt.Texts())
 	}
 
@@ -99,12 +111,18 @@ func TestSettingsTabsAndControls(t *testing.T) {
 		t.Fatalf("expected testedURL %q, got %q", st.Config.MagpieURL, testedURL)
 	}
 
-	if err := tt.Click("显示悬浮面板"); err != nil {
-		t.Fatalf("click 显示悬浮面板 failed: %v", err)
+	if err := tt.Click("60s"); err != nil {
+		t.Fatalf("click 60s failed: %v", err)
 	}
-	if showPanelCalls != 1 {
-		t.Fatalf("expected showPanelCalls=1, got %d", showPanelCalls)
+	if st.Config.RefreshIntervalSecs != 60 {
+		t.Fatalf("expected RefreshIntervalSecs=60, got %d", st.Config.RefreshIntervalSecs)
 	}
+	if len(*configs) == 0 || (*configs)[len(*configs)-1].RefreshIntervalSecs != 60 {
+		t.Fatalf("expected OnConfigChange with RefreshIntervalSecs=60")
+	}
+
+	tt.Wheel(430, 320, 0, 240)
+	tt.Advance(600 * time.Millisecond)
 
 	if !st.Config.OpenAtLogin {
 		t.Fatalf("expected OpenAtLogin=true by default")
@@ -125,18 +143,12 @@ func TestSettingsTabsAndControls(t *testing.T) {
 		t.Fatalf("expected OpenAtLogin=true after second toggle")
 	}
 
-	if err := tt.Click("60s"); err != nil {
-		t.Fatalf("click 60s failed: %v", err)
+	if err := tt.Click("显示悬浮面板"); err != nil {
+		t.Fatalf("click 显示悬浮面板 failed: %v", err)
 	}
-	if st.Config.RefreshIntervalSecs != 60 {
-		t.Fatalf("expected RefreshIntervalSecs=60, got %d", st.Config.RefreshIntervalSecs)
+	if showPanelCalls != 1 {
+		t.Fatalf("expected showPanelCalls=1, got %d", showPanelCalls)
 	}
-	if len(*configs) == 0 || (*configs)[len(*configs)-1].RefreshIntervalSecs != 60 {
-		t.Fatalf("expected OnConfigChange with RefreshIntervalSecs=60")
-	}
-
-	tt.Wheel(430, 320, 0, 240)
-	tt.Advance(600 * time.Millisecond)
 
 	if err := tt.Click("检查更新"); err != nil {
 		t.Fatalf("click 检查更新 failed: %v", err)
@@ -254,7 +266,7 @@ func TestSettingsTabsAndControls(t *testing.T) {
 		t.Fatalf("expected HiddenAccounts[%q]=false after second toggle", firstKey)
 	}
 
-	if err := tt.Click("Azure #4099FF"); err != nil {
+	if err := tt.Click("天蓝 #4099FF"); err != nil {
 		t.Fatalf("click ring tint preset failed: %v", err)
 	}
 	if st.Config.RingTints[firstKey] != "#4099FF" {
@@ -269,6 +281,54 @@ func TestSettingsTabsAndControls(t *testing.T) {
 	}
 }
 
+func TestSettingsLanguageSwitching(t *testing.T) {
+	st, configs := newTestState()
+	if st.Config.Language != model.LangAuto {
+		t.Fatalf("expected default Language=%q, got %q", model.LangAuto, st.Config.Language)
+	}
+
+	tt := ui.NewTester(func(c *ui.Context) {
+		SettingsView(c, st)
+	}, 860, 640)
+
+	// Switch explicitly to Simplified Chinese.
+	if err := tt.Click("简体中文"); err != nil {
+		t.Fatalf("click 简体中文 failed: %v", err)
+	}
+	if st.Config.Language != model.LangZhHans {
+		t.Fatalf("expected Language=%q, got %q", model.LangZhHans, st.Config.Language)
+	}
+	if (*configs)[len(*configs)-1].Language != model.LangZhHans {
+		t.Fatalf("expected OnConfigChange Language=%q", model.LangZhHans)
+	}
+	if !tt.HasText("界面语言") || !tt.HasText("测试连接") {
+		t.Fatalf("expected Chinese UI after switching to 简体中文, got %v", tt.Texts())
+	}
+
+	// Switch explicitly to English (even if tester system locale is zh-Hans).
+	tt.SetLocale("zh-Hans")
+	if err := tt.Click("English"); err != nil {
+		t.Fatalf("click English failed: %v", err)
+	}
+	if st.Config.Language != model.LangEn {
+		t.Fatalf("expected Language=%q, got %q", model.LangEn, st.Config.Language)
+	}
+	if !tt.HasText("Language") || !tt.HasText("Test Connection") {
+		t.Fatalf("expected English UI after switching to English, got %v", tt.Texts())
+	}
+
+	// Switch back to Auto -> follows tester system locale (zh-Hans).
+	if err := tt.Click("Auto"); err != nil {
+		t.Fatalf("click Auto failed: %v", err)
+	}
+	if st.Config.Language != model.LangAuto {
+		t.Fatalf("expected Language=%q, got %q", model.LangAuto, st.Config.Language)
+	}
+	if !tt.HasText("界面语言") || !tt.HasText("自动") {
+		t.Fatalf("expected Auto to follow zh-Hans locale, got %v", tt.Texts())
+	}
+}
+
 func TestSettingsVibrancyAndEmptyAccounts(t *testing.T) {
 	st := &SettingsState{
 		ActiveTab: TabAccounts,
@@ -280,7 +340,12 @@ func TestSettingsVibrancyAndEmptyAccounts(t *testing.T) {
 	}, 800, 560)
 	tt.SetVibrancy(true)
 	tt.Frame()
+	if !tt.HasText("No Accounts Yet") {
+		t.Fatalf("expected English empty accounts state, got %v", tt.Texts())
+	}
+	tt.SetLocale("zh-Hans")
+	tt.Frame()
 	if !tt.HasText("暂无账号数据") {
-		t.Fatalf("expected empty accounts state, got %v", tt.Texts())
+		t.Fatalf("expected Chinese empty accounts state, got %v", tt.Texts())
 	}
 }

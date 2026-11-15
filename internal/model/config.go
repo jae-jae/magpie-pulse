@@ -4,7 +4,33 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 )
+
+type Language string
+
+const (
+	LangAuto   Language = "auto"
+	LangZhHans Language = "zh-Hans"
+	LangEn     Language = "en"
+)
+
+// NormalizeLanguage maps a configured or BCP 47 language string into one of
+// LangAuto, LangZhHans, or LangEn.
+func NormalizeLanguage(lang Language) Language {
+	low := strings.ToLower(strings.TrimSpace(string(lang)))
+	low = strings.ReplaceAll(low, "_", "-")
+	switch {
+	case low == "", low == "auto":
+		return LangAuto
+	case low == "en", strings.HasPrefix(low, "en-"):
+		return LangEn
+	case low == "zh", strings.HasPrefix(low, "zh-hans"), strings.HasPrefix(low, "zh-cn"), strings.HasPrefix(low, "zh-sg"):
+		return LangZhHans
+	default:
+		return LangAuto
+	}
+}
 
 type SurfaceMode string
 
@@ -62,6 +88,7 @@ type Config struct {
 	MagpieURL             string            `json:"magpieUrl"`
 	RefreshIntervalSecs   int               `json:"refreshIntervalSecs"`
 	IncludeCachedAccounts bool              `json:"includeCachedAccounts"`
+	Language              Language          `json:"language"`
 	Surface               SurfaceMode       `json:"surface"`
 	GlassTransparency     float64           `json:"glassTransparency"`
 	DockEdge              DockEdge          `json:"dockEdge"`
@@ -91,6 +118,7 @@ func DefaultConfig() Config {
 		MagpieURL:             "http://127.0.0.1:3425",
 		RefreshIntervalSecs:   30,
 		IncludeCachedAccounts: false,
+		Language:              LangAuto,
 		Surface:               SurfaceDark,
 		GlassTransparency:     0.5,
 		DockEdge:              DockRight,
@@ -122,6 +150,7 @@ func (c *Config) Normalize() {
 	if c.RefreshIntervalSecs < 5 {
 		c.RefreshIntervalSecs = def.RefreshIntervalSecs
 	}
+	c.Language = NormalizeLanguage(c.Language)
 	if c.Surface != SurfaceDark && c.Surface != SurfaceLight && c.Surface != SurfaceGlass {
 		c.Surface = def.Surface
 	}

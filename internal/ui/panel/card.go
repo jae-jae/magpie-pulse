@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"magpie-pulse/internal/i18n"
 	"magpie-pulse/internal/icons"
 	"magpie-pulse/internal/model"
 
@@ -79,6 +80,7 @@ func CardView(c *ui.Context, state *CardState) {
 	}
 	cfg := state.Config
 	cfg.Normalize()
+	msg := i18n.For(cfg.Language, c.Locale())
 	m := model.ComputeMetrics(cfg)
 	s := m.Scale
 	pal := newCardPalette(cfg)
@@ -137,7 +139,7 @@ func CardView(c *ui.Context, state *CardState) {
 	})
 
 	bubble.Children(func() {
-		renderCardHeader(c, state, slot, acc, cfg, pal, s, now)
+		renderCardHeader(c, state, slot, acc, cfg, pal, msg, s, now)
 
 		if strings.TrimSpace(acc.Error) != "" {
 			renderCardErrorBanner(c, acc.Error, pal, s)
@@ -155,10 +157,10 @@ func CardView(c *ui.Context, state *CardState) {
 			scroll.Children(func() {
 				ui.Column(c).Gap(10 * s).FillWidth().Children(func() {
 					for i, w := range shownNumeric {
-						renderNumericWindow(c, i, w, cfg, pal, s, now)
+						renderNumericWindow(c, i, w, cfg, pal, msg, s, now)
 					}
 					if hasMoreToggle {
-						renderShowAllToggle(c, state, len(numeric), pal, s)
+						renderShowAllToggle(c, state, len(numeric), pal, msg, s)
 					}
 					for i, w := range textWins {
 						renderTextWindow(c, i, w, state, pal, s)
@@ -170,11 +172,11 @@ func CardView(c *ui.Context, state *CardState) {
 		if cfg.ShowDetailedCard {
 			if line := pickHistoryLine(state.History, slot); line != nil {
 				renderCardDivider(c, pal)
-				renderHistorySparkline(c, *line, cfg, pal, s)
+				renderHistorySparkline(c, *line, cfg, pal, msg, s)
 			}
 			if state.UsageToday != nil || state.Usage7d != nil || state.Usage30d != nil {
 				renderCardDivider(c, pal)
-				renderUsageFooter(c, state.UsageToday, state.Usage7d, state.Usage30d, pal, s)
+				renderUsageFooter(c, state.UsageToday, state.Usage7d, state.Usage30d, pal, msg, s)
 			}
 		}
 	})
@@ -202,11 +204,11 @@ func paintCardSurface(p *ui.Painter, cardRect ui.Rect, cfg model.Config, ptrCent
 	}
 }
 
-func renderCardHeader(c *ui.Context, state *CardState, slot model.RailSlot, acc model.AccountQuota, cfg model.Config, pal cardPalette, s float32, now time.Time) {
+func renderCardHeader(c *ui.Context, state *CardState, slot model.RailSlot, acc model.AccountQuota, cfg model.Config, pal cardPalette, msg *i18n.Messages, s float32, now time.Time) {
 	ui.Column(c).Gap(4 * s).FillWidth().Children(func() {
 		ui.Row(c).Gap(8 * s).AlignItems(ui.Center).FillWidth().Children(func() {
 			ui.Icon(c, icons.ForProvider(acc.Provider)).Size(18*s, 18*s).TextColor(pal.fg).Shrink(0)
-			ui.Text(c, acc.DisplayName()+" Usage").
+			ui.Text(c, fmt.Sprintf(msg.CardUsageSuffixFmt, acc.DisplayNameLocale(msg.Locale))).
 				FontSize(13.5 * s).
 				FontWeight(600).
 				TextColor(pal.fg).
@@ -221,7 +223,7 @@ func renderCardHeader(c *ui.Context, state *CardState, slot model.RailSlot, acc 
 					Radius(6 * s).
 					Center().
 					Cursor(ui.CursorPointer).
-					Label("Refresh")
+					Label(msg.CardRefreshLabel)
 				if btn.Hovered() {
 					btn.Background(pal.rowHover)
 				}
@@ -239,7 +241,7 @@ func renderCardHeader(c *ui.Context, state *CardState, slot model.RailSlot, acc 
 			parts = append(parts, acc.User)
 		}
 		if rt, ok := acc.ReadTime(); ok {
-			parts = append(parts, "Updated "+model.FormatRelativeTime(now, rt))
+			parts = append(parts, fmt.Sprintf(msg.CardUpdatedFmt, model.FormatRelativeTimeLocale(msg.Locale, now, rt)))
 		}
 		if slot.Pool != "" && cfg.SplitPools {
 			parts = append(parts, slot.Pool)
@@ -255,7 +257,7 @@ func renderCardHeader(c *ui.Context, state *CardState, slot model.RailSlot, acc 
 						Grow(1)
 				}
 				if acc.CachedOnly {
-					renderPill(c, "Cached", pal.badgeBg, pal.muted, 9.5*s, s)
+					renderPill(c, msg.CardCachedPill, pal.badgeBg, pal.muted, 9.5*s, s)
 				}
 			})
 		}
@@ -292,7 +294,7 @@ func renderCardDivider(c *ui.Context, pal cardPalette) {
 	ui.Box(c).Height(1).FillWidth().Background(pal.divider).Shrink(0)
 }
 
-func renderNumericWindow(c *ui.Context, idx int, w model.QuotaWindow, cfg model.Config, pal cardPalette, s float32, now time.Time) {
+func renderNumericWindow(c *ui.Context, idx int, w model.QuotaWindow, cfg model.Config, pal cardPalette, msg *i18n.Messages, s float32, now time.Time) {
 	usedFrac := w.UsedFraction()
 	fillFrac := float32(usedFrac)
 	if cfg.ShowRemaining {
@@ -314,12 +316,12 @@ func renderNumericWindow(c *ui.Context, idx int, w model.QuotaWindow, cfg model.
 		})
 
 		// Left percentage & right reset countdown.
-		pctText := fmt.Sprintf("%.0f%% Used", math.Round(w.Used))
+		pctText := fmt.Sprintf(msg.CardPctUsedFmt, math.Round(w.Used))
 		if cfg.ShowRemaining {
 			rem := w.RemainingFraction() * 100
-			pctText = fmt.Sprintf("%.0f%% Left", math.Round(rem))
+			pctText = fmt.Sprintf(msg.CardPctLeftFmt, math.Round(rem))
 		}
-		resetText := formatWindowReset(w, now)
+		resetText := formatWindowReset(w, msg.Locale, now)
 
 		ui.Row(c).Justify(ui.SpaceBetween).AlignItems(ui.Center).FillWidth().Children(func() {
 			ui.Text(c, pctText).FontSize(11 * s).FontFeatures("tnum").TextColor(pal.muted).SingleLine()
@@ -328,7 +330,7 @@ func renderNumericWindow(c *ui.Context, idx int, w model.QuotaWindow, cfg model.
 			}
 		})
 
-		if holdsLine := formatWindowHolds(w.Holds); holdsLine != "" {
+		if holdsLine := formatWindowHolds(w.Holds, msg); holdsLine != "" {
 			ui.Text(c, holdsLine).FontSize(10.5 * s).FontFeatures("tnum").TextColor(pal.muted).SingleLine()
 		}
 	})
@@ -379,10 +381,10 @@ func drawUsageBar(p *ui.Painter, r ui.Rect, fillFrac float32, fillColor, trackCo
 	}
 }
 
-func renderShowAllToggle(c *ui.Context, state *CardState, total int, pal cardPalette, s float32) {
-	label := fmt.Sprintf("Show all %d model limits", total)
+func renderShowAllToggle(c *ui.Context, state *CardState, total int, pal cardPalette, msg *i18n.Messages, s float32) {
+	label := fmt.Sprintf(msg.CardShowAllFmt, total)
 	if state.ShowAllModels {
-		label = "Show summary only"
+		label = msg.CardShowSummary
 	}
 	btn := ui.Box(c.Key("toggle-all-models")).
 		Padding(5*s, 8*s).
@@ -433,19 +435,19 @@ func renderTextWindow(c *ui.Context, idx int, w model.QuotaWindow, state *CardSt
 	})
 }
 
-func renderHistorySparkline(c *ui.Context, line model.HistoryLine, cfg model.Config, pal cardPalette, s float32) {
+func renderHistorySparkline(c *ui.Context, line model.HistoryLine, cfg model.Config, pal cardPalette, msg *i18n.Messages, s float32) {
 	pts := line.Points
 	last := pts[len(pts)-1]
 	tint := model.UsageTintColor((100-last.Left)/100, last.Left <= 0, cfg.WarningThreshold, pal.light)
-	title := "Quota History"
+	title := msg.CardQuotaHistory
 	if strings.TrimSpace(line.Name) != "" {
-		title = line.Name + " History"
+		title = fmt.Sprintf(msg.CardNamedHistoryFmt, line.Name)
 	}
 
 	ui.Column(c).Gap(5 * s).FillWidth().Children(func() {
 		ui.Row(c).Justify(ui.SpaceBetween).AlignItems(ui.Center).FillWidth().Children(func() {
 			ui.Text(c, title).FontSize(10.5 * s).TextColor(pal.muted).SingleLine()
-			ui.Text(c, fmt.Sprintf("%.0f%% left", math.Round(last.Left))).
+			ui.Text(c, fmt.Sprintf(msg.CardSparklineLeftFmt, math.Round(last.Left))).
 				FontSize(10.5 * s).FontFeatures("tnum").TextColor(pal.muted).SingleLine()
 		})
 		ui.Box(c).Height(34 * s).FillWidth().Radius(8 * s).Background(pal.badgeBg).Draw(func(p *ui.Painter, r ui.Rect) {
@@ -468,14 +470,14 @@ func renderHistorySparkline(c *ui.Context, line model.HistoryLine, cfg model.Con
 	})
 }
 
-func renderUsageFooter(c *ui.Context, today, week, month *model.UsageSummary, pal cardPalette, s float32) {
+func renderUsageFooter(c *ui.Context, today, week, month *model.UsageSummary, pal cardPalette, msg *i18n.Messages, s float32) {
 	cols := []struct {
 		label string
 		data  *model.UsageSummary
 	}{
-		{"Today", today},
-		{"7 days", week},
-		{"30 days", month},
+		{msg.CardToday, today},
+		{msg.Card7Days, week},
+		{msg.Card30Days, month},
 	}
 	ui.Row(c).Gap(6 * s).FillWidth().Children(func() {
 		for _, col := range cols {
@@ -591,31 +593,31 @@ func pickHistoryLine(hist *model.AccountHistory, slot model.RailSlot) *model.His
 	return nil
 }
 
-func formatWindowReset(w model.QuotaWindow, now time.Time) string {
+func formatWindowReset(w model.QuotaWindow, locale string, now time.Time) string {
 	if rt, ok := w.ResetTime(); ok {
-		return model.FormatResetCountdown(now, rt)
+		return model.FormatResetCountdownLocale(locale, now, rt)
 	}
 	if w.ResetSecs > 0 {
-		return model.FormatResetCountdown(now, now.Add(time.Duration(w.ResetSecs)*time.Second))
+		return model.FormatResetCountdownLocale(locale, now, now.Add(time.Duration(w.ResetSecs)*time.Second))
 	}
 	return ""
 }
 
-func formatWindowHolds(h *model.WindowHolds) string {
+func formatWindowHolds(h *model.WindowHolds, msg *i18n.Messages) string {
 	if h == nil {
 		return ""
 	}
 	if h.Routed != nil {
 		r := h.Routed
 		parts := []string{
-			model.FormatShortTokens(r.Tokens) + " tok",
+			model.FormatShortTokens(r.Tokens) + " " + msg.CardTokenUnit,
 			fmt.Sprintf("$%.2f", r.Cost),
-			formatIntCommas(r.Calls) + " calls",
+			fmt.Sprintf(msg.CardCallsFmt, formatIntCommas(r.Calls)),
 		}
 		return strings.Join(parts, " · ")
 	}
 	if h.Tokens > 0 || h.Cost > 0 {
-		parts := []string{model.FormatShortTokens(h.Tokens) + " tok"}
+		parts := []string{model.FormatShortTokens(h.Tokens) + " " + msg.CardTokenUnit}
 		if h.Priced || h.Cost > 0 {
 			parts = append(parts, fmt.Sprintf("$%.2f", h.Cost))
 		}

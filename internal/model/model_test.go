@@ -156,6 +156,64 @@ func TestUsageTintAndMetrics(t *testing.T) {
 	}
 }
 
+func TestConfigLanguageDefaultsAndFormatting(t *testing.T) {
+	def := DefaultConfig()
+	if def.Language != LangAuto {
+		t.Fatalf("DefaultConfig().Language = %q, want %q", def.Language, LangAuto)
+	}
+
+	cases := map[Language]Language{
+		"":        LangAuto,
+		"auto":    LangAuto,
+		"AUTO":    LangAuto,
+		"zh":      LangZhHans,
+		"zh-CN":   LangZhHans,
+		"zh_CN":   LangZhHans,
+		"zh-Hans": LangZhHans,
+		"en":      LangEn,
+		"en-US":   LangEn,
+		"fr-FR":   LangAuto,
+	}
+	for in, want := range cases {
+		if got := NormalizeLanguage(in); got != want {
+			t.Errorf("NormalizeLanguage(%q) = %q, want %q", in, got, want)
+		}
+	}
+
+	cfg := DefaultConfig()
+	cfg.Language = "zh-CN"
+	cfg.Normalize()
+	if cfg.Language != LangZhHans {
+		t.Fatalf("Config.Normalize() Language = %q, want %q", cfg.Language, LangZhHans)
+	}
+
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	if got := FormatRelativeTimeLocale("zh-Hans", now, now.Add(-20*time.Second)); got != "刚刚" {
+		t.Fatalf("zh relative just now = %q", got)
+	}
+	if got := FormatRelativeTimeLocale("zh-Hans", now, now.Add(-5*time.Minute)); got != "5 分钟前" {
+		t.Fatalf("zh relative 5m = %q", got)
+	}
+	if got := FormatRelativeTimeLocale("en", now, now.Add(-5*time.Minute)); got != "5 min ago" {
+		t.Fatalf("en relative 5m = %q", got)
+	}
+	if got := FormatResetCountdownLocale("zh-Hans", now, now.Add(-time.Second)); got != "即将重置" {
+		t.Fatalf("zh reset soon = %q", got)
+	}
+	if got := FormatResetCountdownLocale("zh-Hans", now, now.Add(25*time.Minute)); got != "25 分钟后重置" {
+		t.Fatalf("zh reset 25m = %q", got)
+	}
+	if got := FormatResetCountdownLocale("en", now, now.Add(25*time.Minute)); got != "Resets in 25m" {
+		t.Fatalf("en reset 25m = %q", got)
+	}
+	if got := (AccountQuota{}).DisplayNameLocale("zh-Hans"); got != "未知" {
+		t.Fatalf("zh unknown display name = %q", got)
+	}
+	if got := (AccountQuota{}).DisplayNameLocale("en"); got != "Unknown" {
+		t.Fatalf("en unknown display name = %q", got)
+	}
+}
+
 func TestOpenAtLoginConfigDefaultsAndPersistence(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

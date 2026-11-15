@@ -232,17 +232,34 @@ func TestEndToEndFlow(t *testing.T) {
 	sett.SetScale(2)
 	sett.Frame()
 
-	if err := sett.Click("测试连接"); err != nil {
-		t.Fatalf("click 测试连接: %v", err)
+	if err := sett.Click("Test Connection"); err != nil {
+		t.Fatalf("click Test Connection: %v", err)
 	}
 	if !st.TestOK {
 		t.Fatalf("expected TestOK=true, got status=%q", st.TestStatus)
 	}
-	if err := sett.Click("账号总览"); err != nil {
+	if err := sett.Click("Accounts"); err != nil {
 		t.Fatalf("switch to accounts tab: %v", err)
 	}
 	if !sett.HasText("Antigravity") || !sett.HasText("ZCode") {
 		t.Fatalf("accounts tab missing expected accounts: %v", sett.Texts())
+	}
+
+	// Switch to General, pick 简体中文, and verify Chinese E2E flow.
+	if err := sett.Click("General"); err != nil {
+		t.Fatalf("switch to general tab: %v", err)
+	}
+	if err := sett.Click("简体中文"); err != nil {
+		t.Fatalf("switch to 简体中文: %v", err)
+	}
+	if err := sett.Click("测试连接"); err != nil {
+		t.Fatalf("click 测试连接: %v", err)
+	}
+	if err := sett.Click("账号总览"); err != nil {
+		t.Fatalf("switch to 账号总览 tab: %v", err)
+	}
+	if !sett.HasText("在线") || !sett.HasText("异常") {
+		t.Fatalf("accounts tab missing Chinese status badges: %v", sett.Texts())
 	}
 }
 
@@ -499,6 +516,7 @@ func captureScreenshotSuite(t *testing.T, outDir string, cfg model.Config, snap 
 	sett.SetScale(2)
 	sett.SetDark(true)
 	sett.SetVibrancy(false)
+	sett.SetLocale("zh-Hans")
 	sett.Frame()
 	if err := savePNG(filepath.Join(outDir, "magpie-pulse-settings-general.png"), sett.Image()); err != nil {
 		t.Fatal(err)

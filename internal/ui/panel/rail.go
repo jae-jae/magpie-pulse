@@ -3,6 +3,7 @@ package panel
 import (
 	"time"
 
+	"magpie-pulse/internal/i18n"
 	"magpie-pulse/internal/icons"
 	"magpie-pulse/internal/model"
 
@@ -36,6 +37,7 @@ func RailView(c *ui.Context, state *RailState) {
 	}
 	cfg := state.Config
 	cfg.Normalize()
+	msg := i18n.For(cfg.Language, c.Locale())
 	if state.SlotBounds == nil {
 		state.SlotBounds = map[string]ui.Rect{}
 	}
@@ -112,7 +114,7 @@ func RailView(c *ui.Context, state *RailState) {
 			}
 			emptyBtn := ui.Box(c.Key("empty-settings")).
 				Absolute().Left(bx).Top(by).Size(btnSize, btnSize).
-				Center().Cursor(ui.CursorPointer).Label("Settings").
+				Center().Cursor(ui.CursorPointer).Label(msg.RailSettingsLabel).
 				Opacity(slotOpacity).Hidden(slotsHidden)
 			if emptyBtn.Clicked() && state.OnOpenSettings != nil {
 				state.OnOpenSettings()

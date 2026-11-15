@@ -242,6 +242,11 @@ func (a AccountQuota) AccountKey() string {
 
 // DisplayName returns the friendly provider title.
 func (a AccountQuota) DisplayName() string {
+	return a.DisplayNameLocale("en")
+}
+
+// DisplayNameLocale returns the friendly provider title localized for locale.
+func (a AccountQuota) DisplayNameLocale(locale string) string {
 	if strings.TrimSpace(a.Name) != "" {
 		return a.Name
 	}
@@ -264,6 +269,9 @@ func (a AccountQuota) DisplayName() string {
 		return "Kiro"
 	default:
 		if a.Provider == "" {
+			if isZhLocale(locale) {
+				return "未知"
+			}
 			return "Unknown"
 		}
 		return strings.ToUpper(a.Provider[:1]) + a.Provider[1:]
@@ -349,11 +357,33 @@ func FormatShortTokens(n int64) string {
 	}
 }
 
-// FormatRelativeTime formats how long ago t occurred.
+func isZhLocale(locale string) bool {
+	low := strings.ToLower(strings.TrimSpace(locale))
+	return low == "zh" || strings.HasPrefix(low, "zh-hans") || strings.HasPrefix(low, "zh-cn") || strings.HasPrefix(low, "zh-sg")
+}
+
+// FormatRelativeTime formats how long ago t occurred in English.
 func FormatRelativeTime(now, t time.Time) string {
+	return FormatRelativeTimeLocale("en", now, t)
+}
+
+// FormatRelativeTimeLocale formats how long ago t occurred for the given locale.
+func FormatRelativeTimeLocale(locale string, now, t time.Time) string {
 	d := now.Sub(t)
 	if d < 0 {
 		d = 0
+	}
+	if isZhLocale(locale) {
+		switch {
+		case d < time.Minute:
+			return "刚刚"
+		case d < time.Hour:
+			return fmt.Sprintf("%d 分钟前", int(d.Minutes()))
+		case d < 24*time.Hour:
+			return fmt.Sprintf("%d 小时前", int(d.Hours()))
+		default:
+			return fmt.Sprintf("%d 天前", int(d.Hours()/24))
+		}
 	}
 	switch {
 	case d < time.Minute:
@@ -367,16 +397,34 @@ func FormatRelativeTime(now, t time.Time) string {
 	}
 }
 
-// FormatResetCountdown formats the reset timestamp concisely.
+// FormatResetCountdown formats the reset timestamp concisely in English.
 func FormatResetCountdown(now, reset time.Time) string {
+	return FormatResetCountdownLocale("en", now, reset)
+}
+
+// FormatResetCountdownLocale formats the reset timestamp concisely for the given locale.
+func FormatResetCountdownLocale(locale string, now, reset time.Time) string {
 	d := reset.Sub(now)
 	if d <= 0 {
+		if isZhLocale(locale) {
+			return "即将重置"
+		}
 		return "Resetting soon"
 	}
 	days := int(d.Hours()) / 24
 	hours := int(d.Hours()) % 24
 	mins := int(d.Minutes()) % 60
 	local := reset.Local()
+	if isZhLocale(locale) {
+		switch {
+		case days >= 1:
+			return fmt.Sprintf("%s 重置 (%d天%d小时)", local.Format("1/2 15:04"), days, hours)
+		case hours >= 1:
+			return fmt.Sprintf("%s 重置 (%d小时%d分)", local.Format("15:04"), hours, mins)
+		default:
+			return fmt.Sprintf("%d 分钟后重置", max(mins, 1))
+		}
+	}
 	switch {
 	case days >= 1:
 		return fmt.Sprintf("Resets %s (%dd %dh)", local.Format("Jan 2 15:04"), days, hours)
