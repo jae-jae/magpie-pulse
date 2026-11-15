@@ -1,6 +1,7 @@
 package app
 
 import (
+	"slices"
 	"testing"
 
 	"magpie-pulse/internal/model"
@@ -254,5 +255,68 @@ func TestWorstAlertSummaryLocale(t *testing.T) {
 	}
 	if _, tip := WorstAlertSummaryLocale("zh-Hans", nil, cfg, accSnap); tip != "Magpie Pulse · 2 个账号" {
 		t.Fatalf("zh accounts tip = %q", tip)
+	}
+}
+
+func TestOpenAtLoginSyncAndToggle(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	a := New()
+	if !a.cfg.OpenAtLogin {
+		t.Fatal("expected initial config OpenAtLogin=true")
+	}
+
+	var calls []bool
+	osState := false
+	autoAllowed := true
+	a.canAutoLogin = func() bool { return autoAllowed }
+	a.getOpenAtLogin = func() bool { return osState }
+	a.setOpenAtLogin = func(open bool) error {
+		calls = append(calls, open)
+		osState = open
+		return nil
+	}
+
+	// First ready sync registers the default-enabled login item.
+	a.syncOpenAtLoginOnReady()
+	if !slices.Equal(calls, []bool{true}) || !osState {
+		t.Fatalf("expected initial sync to enable login item, calls=%v osState=%v", calls, osState)
+	}
+
+	// Subsequent ready sync when OS already matches does nothing.
+	a.syncOpenAtLoginOnReady()
+	if len(calls) != 1 {
+		t.Fatalf("expected no-op sync when OS state matches, calls=%v", calls)
+	}
+
+	// When auto-sync is disabled (e.g. dev/unpackaged mode), ready sync does nothing.
+	autoAllowed = false
+	osState = false
+	a.syncOpenAtLoginOnReady()
+	if len(calls) != 1 {
+		t.Fatalf("expected skipped sync when canAutoLogin=false, calls=%v", calls)
+	}
+
+	// Toggling via applyConfig updates OS state and persists config.
+	next := a.cfg
+	next.OpenAtLogin = false
+	a.applyConfig(next)
+	if !slices.Equal(calls, []bool{true, false}) {
+		t.Fatalf("expected applyConfig(false) to call setOpenAtLogin(false), calls=%v", calls)
+	}
+	if reloaded := model.LoadConfig(); reloaded.OpenAtLogin {
+		t.Fatal("expected persisted OpenAtLogin=false")
+	}
+
+	// No-op config update without changing OpenAtLogin does not re-invoke setOpenAtLogin.
+	a.applyConfig(next)
+	if len(calls) != 2 {
+		t.Fatalf("expected unchanged OpenAtLogin not to call setOpenAtLogin, calls=%v", calls)
+	}
+
+	next.OpenAtLogin = true
+	a.applyConfig(next)
+	if !slices.Equal(calls, []bool{true, false, true}) || !osState {
+		t.Fatalf("expected applyConfig(true) to call setOpenAtLogin(true), calls=%v osState=%v", calls, osState)
 	}
 }

@@ -105,6 +105,7 @@ type Config struct {
 	ShowDetailedCard      bool              `json:"showDetailedCard"`
 	ShowInDock            bool              `json:"showInDock"`
 	NotifyOnThreshold     bool              `json:"notifyOnThreshold"`
+	OpenAtLogin           bool              `json:"openAtLogin"`
 	HiddenAccounts        map[string]bool   `json:"hiddenAccounts"`
 	RingTints             map[string]string `json:"ringTints"`
 	FloatX                int               `json:"floatX"`
@@ -134,6 +135,7 @@ func DefaultConfig() Config {
 		ShowDetailedCard:      true,
 		ShowInDock:            false,
 		NotifyOnThreshold:     true,
+		OpenAtLogin:           true,
 		HiddenAccounts:        map[string]bool{},
 		RingTints:             map[string]string{},
 		RailRatio:             0.35,

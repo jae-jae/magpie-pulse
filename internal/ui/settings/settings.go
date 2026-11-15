@@ -332,6 +332,12 @@ func renderGeneralPane(c *ui.Context, st *SettingsState, msg *i18n.Messages) {
 
 			ui.Divider(c)
 
+			settingsSwitchRow(c, "open-at-login", msg.OpenAtLogin, msg.OpenAtLoginDesc, &st.Config.OpenAtLogin, func() {
+				st.emitConfigChange()
+			})
+
+			ui.Divider(c)
+
 			settingsSwitchRow(c, "show-in-dock", msg.ShowInDock, msg.ShowInDockDesc, &st.Config.ShowInDock, func() {
 				st.emitConfigChange()
 			})

@@ -95,6 +95,8 @@ type Messages struct {
 	LanguageAuto         string
 	LanguageZhHans       string
 	LanguageEn           string
+	OpenAtLogin          string
+	OpenAtLoginDesc      string
 	ShowInDock           string
 	ShowInDockDesc       string
 	NotifyThreshold      string
@@ -337,6 +339,8 @@ var enMessages = Messages{
 	LanguageAuto:         "Auto",
 	LanguageZhHans:       "简体中文",
 	LanguageEn:           "English",
+	OpenAtLogin:          "Launch at Login",
+	OpenAtLoginDesc:      "Automatically start Magpie Pulse when you log in",
 	ShowInDock:           "Show in Dock",
 	ShowInDockDesc:       "Display the application icon in the macOS Dock",
 	NotifyThreshold:      "Threshold Notifications",
@@ -490,6 +494,8 @@ var zhHansMessages = Messages{
 	LanguageAuto:         "自动",
 	LanguageZhHans:       "简体中文",
 	LanguageEn:           "English",
+	OpenAtLogin:          "开机启动",
+	OpenAtLoginDesc:      "登录系统时自动启动 Magpie Pulse",
 	ShowInDock:           "在程序坞显示图标",
 	ShowInDockDesc:       "开启后应用图标将显示在 macOS Dock 栏中",
 	NotifyThreshold:      "超阈值桌面通知",
